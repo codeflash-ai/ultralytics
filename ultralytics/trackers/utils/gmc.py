@@ -184,16 +184,31 @@ class GMC:
 
         # Downscale image
         if self.downscale > 1.0:
-            frame = cv2.resize(frame, (width // self.downscale, height // self.downscale))
-            width = width // self.downscale
-            height = height // self.downscale
+            dscale = self.downscale
+            width = width // dscale
+            height = height // dscale
+            frame = cv2.resize(frame, (width, height))
+        else:
+            dscale = 1.0
+
+        # Allocate mask buffer only once per function
 
         # Find the keypoints
         mask = np.zeros_like(frame)
-        mask[int(0.02 * height) : int(0.98 * height), int(0.02 * width) : int(0.98 * width)] = 255
-        if detections is not None:
-            for det in detections:
-                tlbr = (det[:4] / self.downscale).astype(np.int_)
+
+        # Fill mask (inner region used for features)
+        y0 = int(0.02 * height)
+        y1 = int(0.98 * height)
+        x0 = int(0.02 * width)
+        x1 = int(0.98 * width)
+        mask[y0:y1, x0:x1] = 255
+
+        # Zero out detection regions
+        if detections is not None and len(detections) > 0:
+            detsArr = np.asarray(detections)
+            # Vectorized int coords for detection bounding boxes
+            tlbrs = (detsArr[:, :4] / dscale).astype(np.int_)
+            for tlbr in tlbrs:
                 mask[tlbr[1] : tlbr[3], tlbr[0] : tlbr[2]] = 0
 
         keypoints = self.detector.detect(frame, mask)
@@ -220,10 +235,11 @@ class GMC:
         matches = []
         spatialDistances = []
 
-        maxSpatialDistance = 0.25 * np.array([width, height])
+        maxSpatialDistanceX = 0.25 * width
+        maxSpatialDistanceY = 0.25 * height
 
         # Handle empty matches case
-        if len(knnMatches) == 0:
+        if not knnMatches:
             # Store to next iteration
             self.prevFrame = frame.copy()
             self.prevKeyPoints = copy.copy(keypoints)
@@ -231,68 +247,65 @@ class GMC:
 
             return H
 
+        # Loops are near unavoidable here, but can avoid tuple creation and unneeded abs, allocate lists once.
+        append_spatialDistances = spatialDistances.append
+        append_matches = matches.append
+        prevKeyPoints = self.prevKeyPoints
+        currKeyPoints = keypoints
+
         for m, n in knnMatches:
             if m.distance < 0.9 * n.distance:
-                prevKeyPointLocation = self.prevKeyPoints[m.queryIdx].pt
-                currKeyPointLocation = keypoints[m.trainIdx].pt
+                pkp = prevKeyPoints[m.queryIdx].pt
+                ckp = currKeyPoints[m.trainIdx].pt
+                dx = pkp[0] - ckp[0]
+                dy = pkp[1] - ckp[1]
 
-                spatialDistance = (
-                    prevKeyPointLocation[0] - currKeyPointLocation[0],
-                    prevKeyPointLocation[1] - currKeyPointLocation[1],
-                )
+                # Avoid creating tuple and use fast abs primitives
+                if abs(dx) < maxSpatialDistanceX and abs(dy) < maxSpatialDistanceY:
+                    append_spatialDistances((dx, dy))
+                    append_matches(m)
 
-                if (np.abs(spatialDistance[0]) < maxSpatialDistance[0]) and (
-                    np.abs(spatialDistance[1]) < maxSpatialDistance[1]
-                ):
-                    spatialDistances.append(spatialDistance)
-                    matches.append(m)
+        # Early exit if not enough matches
+        if not spatialDistances:
+            self.prevFrame = frame.copy()
+            self.prevKeyPoints = copy.copy(keypoints)
+            self.prevDescriptors = copy.copy(descriptors)
+            return H
 
-        meanSpatialDistances = np.mean(spatialDistances, 0)
-        stdSpatialDistances = np.std(spatialDistances, 0)
+        # Numpy calculations for mean/std/inliers
+        spatialDistancesArr = np.array(spatialDistances)
+        meanSpatialDistances = np.mean(spatialDistancesArr, axis=0)
+        stdSpatialDistances = np.std(spatialDistancesArr, axis=0)
+        # Broadcasting, avoid creating new array
+        inliersMask = (spatialDistancesArr - meanSpatialDistances) < (2.5 * stdSpatialDistances)
 
-        inliers = (spatialDistances - meanSpatialDistances) < 2.5 * stdSpatialDistances
+        # Collect good matches and their locations
+        goodMatches, prevPoints, currPoints = [], [], []
 
-        goodMatches = []
-        prevPoints = []
-        currPoints = []
-        for i in range(len(matches)):
-            if inliers[i, 0] and inliers[i, 1]:
-                goodMatches.append(matches[i])
-                prevPoints.append(self.prevKeyPoints[matches[i].queryIdx].pt)
-                currPoints.append(keypoints[matches[i].trainIdx].pt)
+        matchesArr = matches  # length == spatialDistancesArr.shape[0]
+        nMatches = spatialDistancesArr.shape[0]
+        inliersMask0 = inliersMask[:, 0]
+        inliersMask1 = inliersMask[:, 1]
 
-        prevPoints = np.array(prevPoints)
-        currPoints = np.array(currPoints)
+        for i in range(nMatches):
+            if inliersMask0[i] and inliersMask1[i]:
+                m = matchesArr[i]
+                goodMatches.append(m)
+                prevPoints.append(prevKeyPoints[m.queryIdx].pt)
+                currPoints.append(currKeyPoints[m.trainIdx].pt)
 
-        # Draw the keypoint matches on the output image
-        # if False:
-        #     import matplotlib.pyplot as plt
-        #     matches_img = np.hstack((self.prevFrame, frame))
-        #     matches_img = cv2.cvtColor(matches_img, cv2.COLOR_GRAY2BGR)
-        #     W = self.prevFrame.shape[1]
-        #     for m in goodMatches:
-        #         prev_pt = np.array(self.prevKeyPoints[m.queryIdx].pt, dtype=np.int_)
-        #         curr_pt = np.array(keypoints[m.trainIdx].pt, dtype=np.int_)
-        #         curr_pt[0] += W
-        #         color = np.random.randint(0, 255, 3)
-        #         color = (int(color[0]), int(color[1]), int(color[2]))
-        #
-        #         matches_img = cv2.line(matches_img, prev_pt, curr_pt, tuple(color), 1, cv2.LINE_AA)
-        #         matches_img = cv2.circle(matches_img, prev_pt, 2, tuple(color), -1)
-        #         matches_img = cv2.circle(matches_img, curr_pt, 2, tuple(color), -1)
-        #
-        #     plt.figure()
-        #     plt.imshow(matches_img)
-        #     plt.show()
+        prevPointsArr = np.array(prevPoints)
+        currPointsArr = np.array(currPoints)
 
         # Find rigid matrix
-        if prevPoints.shape[0] > 4:
-            H, inliers = cv2.estimateAffinePartial2D(prevPoints, currPoints, cv2.RANSAC)
-
+        if prevPointsArr.shape[0] > 4:
+            H_fit, _ = cv2.estimateAffinePartial2D(prevPointsArr, currPointsArr, cv2.RANSAC)
             # Handle downscale
-            if self.downscale > 1.0:
-                H[0, 2] *= self.downscale
-                H[1, 2] *= self.downscale
+            if self.downscale > 1.0 and H_fit is not None:
+                H_fit[0, 2] *= self.downscale
+                H_fit[1, 2] *= self.downscale
+            if H_fit is not None:
+                H = H_fit
         else:
             LOGGER.warning("WARNING: not enough matching points")
 
@@ -328,7 +341,10 @@ class GMC:
         if self.downscale > 1.0:
             frame = cv2.resize(frame, (width // self.downscale, height // self.downscale))
 
-        # Find the keypoints
+            # Find the keypoints
+            width = width // self.downscale
+            height = height // self.downscale
+
         keypoints = cv2.goodFeaturesToTrack(frame, mask=None, **self.feature_params)
 
         # Handle first frame
@@ -341,25 +357,23 @@ class GMC:
         # Find correspondences
         matchedKeypoints, status, _ = cv2.calcOpticalFlowPyrLK(self.prevFrame, frame, self.prevKeyPoints, None)
 
-        # Leave good correspondences only
-        prevPoints = []
-        currPoints = []
+        # Use numpy filtering for speed over list comprehensions for large arrays
+        if status is not None and matchedKeypoints is not None and self.prevKeyPoints is not None:
+            statusFlat = status.ravel().astype(bool)
+            prevPts = np.asarray(self.prevKeyPoints)[statusFlat]
+            currPts = np.asarray(matchedKeypoints)[statusFlat]
+        else:
+            prevPts = np.array([])
+            currPts = np.array([])
 
-        for i in range(len(status)):
-            if status[i]:
-                prevPoints.append(self.prevKeyPoints[i])
-                currPoints.append(matchedKeypoints[i])
-
-        prevPoints = np.array(prevPoints)
-        currPoints = np.array(currPoints)
-
-        # Find rigid matrix
-        if (prevPoints.shape[0] > 4) and (prevPoints.shape[0] == currPoints.shape[0]):
-            H, _ = cv2.estimateAffinePartial2D(prevPoints, currPoints, cv2.RANSAC)
-
-            if self.downscale > 1.0:
-                H[0, 2] *= self.downscale
-                H[1, 2] *= self.downscale
+        # Find rigid matrix if enough matches
+        if prevPts.shape[0] > 4 and prevPts.shape[0] == currPts.shape[0]:
+            H_fit, _ = cv2.estimateAffinePartial2D(prevPts, currPts, cv2.RANSAC)
+            if self.downscale > 1.0 and H_fit is not None:
+                H_fit[0, 2] *= self.downscale
+                H_fit[1, 2] *= self.downscale
+            if H_fit is not None:
+                H = H_fit
         else:
             LOGGER.warning("WARNING: not enough matching points")
 
