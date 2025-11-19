@@ -52,12 +52,20 @@ def is_url(url, check=False):
         >>> valid = is_url("https://www.example.com")
     """
     try:
-        url = str(url)
-        result = parse.urlparse(url)
-        assert all([result.scheme, result.netloc])  # check if is url
+        url_str = str(url)
+        result = parse.urlparse(url_str)
+        # Avoid building a list for assert all, check directly for scheme and netloc
+        if not (result.scheme and result.netloc):
+            return False
         if check:
-            with request.urlopen(url) as response:
-                return response.getcode() == 200  # check if exists online
+            # Use HEAD request for minimal data transfer since we just want to check existence
+            req = request.Request(url_str, method="HEAD")
+            try:
+                with request.urlopen(req) as response:
+                    # Accept any valid HTTP 2XX response
+                    return 200 <= response.getcode() < 300
+            except Exception:
+                return False
         return True
     except Exception:
         return False
