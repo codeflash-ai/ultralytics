@@ -517,13 +517,17 @@ class ProfileModels:
         Returns:
             (numpy.ndarray): Clipped data array with outliers removed.
         """
-        data = np.array(data)
+        data = np.asarray(data)
         for _ in range(max_iters):
-            mean, std = np.mean(data), np.std(data)
-            clipped_data = data[(data > mean - sigma * std) & (data < mean + sigma * std)]
-            if len(clipped_data) == len(data):
+            if data.size == 0:
                 break
-            data = clipped_data
+            mean = data.mean()
+            std = data.std()
+            # Combine boolean mask & slicing for efficiency
+            mask = (data > mean - sigma * std) & (data < mean + sigma * std)
+            if mask.all():
+                break
+            data = data[mask]
         return data
 
     def profile_tensorrt_model(self, engine_file: str, eps: float = 1e-3):
