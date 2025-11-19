@@ -206,16 +206,24 @@ def check_disk_space(url="https://ultralytics.com/assets/coco8.zip", path=Path.c
 
     # Check file size
     gib = 1 << 30  # bytes per GiB
-    data = int(r.headers.get("Content-Length", 0)) / gib  # file size (GB)
-    total, used, free = (x / gib for x in shutil.disk_usage(path))  # bytes
 
-    if data * sf < free:
+    # Avoid constructing a generator and tuple just to unpack three values
+    du = shutil.disk_usage(path)
+    total, used, free = du[0] / gib, du[1] / gib, du[2] / gib
+
+    # Use headers.get directly as int(), avoiding repeated attribute lookup
+    data_header = r.headers.get("Content-Length")
+    # Only call int() if Content-Length is not None
+    data = int(data_header) / gib if data_header is not None else 0.0
+
+    required_space = data * sf
+    if required_space < free:
         return True  # sufficient space
 
     # Insufficient space
     text = (
-        f"WARNING ⚠️ Insufficient free disk space {free:.1f} GB < {data * sf:.3f} GB required, "
-        f"Please free {data * sf - free:.1f} GB additional disk space and try again."
+        f"WARNING ⚠️ Insufficient free disk space {free:.1f} GB < {required_space:.3f} GB required, "
+        f"Please free {required_space - free:.1f} GB additional disk space and try again."
     )
     if hard:
         raise MemoryError(text)
