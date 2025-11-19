@@ -342,16 +342,9 @@ class GMC:
         matchedKeypoints, status, _ = cv2.calcOpticalFlowPyrLK(self.prevFrame, frame, self.prevKeyPoints, None)
 
         # Leave good correspondences only
-        prevPoints = []
-        currPoints = []
-
-        for i in range(len(status)):
-            if status[i]:
-                prevPoints.append(self.prevKeyPoints[i])
-                currPoints.append(matchedKeypoints[i])
-
-        prevPoints = np.array(prevPoints)
-        currPoints = np.array(currPoints)
+        status_mask = status.reshape(-1).astype(bool)
+        prevPoints = self.prevKeyPoints[status_mask]
+        currPoints = matchedKeypoints[status_mask]
 
         # Find rigid matrix
         if (prevPoints.shape[0] > 4) and (prevPoints.shape[0] == currPoints.shape[0]):
