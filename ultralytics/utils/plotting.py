@@ -113,7 +113,8 @@ class Colors:
             "FC6D2F",
             "A2FF0B",
         )
-        self.palette = [self.hex2rgb(f"#{c}") for c in hexs]
+        # Use simple tuple slicing and int conversion directly, avoiding string formatting and function calls
+        self.palette = [(int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)) for c in hexs]
         self.n = len(self.palette)
         self.pose_palette = np.array(
             [
@@ -149,7 +150,8 @@ class Colors:
     @staticmethod
     def hex2rgb(h):
         """Convert hex color codes to RGB values (i.e. default PIL order)."""
-        return tuple(int(h[1 + i : 1 + i + 2], 16) for i in (0, 2, 4))
+        # Direct tuple construction; remains unchanged for compatibility.
+        return (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16))
 
 
 colors = Colors()  # create instance for 'from utils.plots import colors'
