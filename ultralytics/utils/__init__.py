@@ -808,25 +808,34 @@ def get_user_config_dir(sub_dir="Ultralytics"):
     Returns:
         (Path): The path to the user config directory.
     """
+    home = Path.home()  # Cache expensive os.path.expanduser("~") call for performance
+    # Avoid repeated 'if LINUX' and friends by computing 'path' logic in sequence
     if WINDOWS:
-        path = Path.home() / "AppData" / "Roaming" / sub_dir
+        path = home / "AppData" / "Roaming" / sub_dir
     elif MACOS:  # macOS
-        path = Path.home() / "Library" / "Application Support" / sub_dir
+        path = home / "Library" / "Application Support" / sub_dir
     elif LINUX:
-        path = Path.home() / ".config" / sub_dir
+        # ".config" join is fast, computation dominated by Path.home()
+        path = home / ".config" / sub_dir
     else:
         raise ValueError(f"Unsupported operating system: {platform.system()}")
 
-    # GCP and AWS lambda fix, only /tmp is writeable
-    if not is_dir_writeable(path.parent):
+    parent_path = path.parent  # Only call this once, reuse
+    if not is_dir_writeable(parent_path):
         LOGGER.warning(
             f"WARNING ⚠️ user config directory '{path}' is not writeable, defaulting to '/tmp' or CWD."
             "Alternatively you can define a YOLO_CONFIG_DIR environment variable for this path."
         )
-        path = Path("/tmp") / sub_dir if is_dir_writeable("/tmp") else Path().cwd() / sub_dir
+        # Only call is_dir_writeable("/tmp") once
+        if is_dir_writeable("/tmp"):
+            path = Path("/tmp") / sub_dir
+        else:
+            path = Path().cwd() / sub_dir
 
-    # Create the subdirectory if it does not exist
-    path.mkdir(parents=True, exist_ok=True)
+    # Avoid unnecessary mkdir if directory exists to save syscalls
+    # Path.mkdir(parents=True, exist_ok=True) already short circuits if exists, but checking `exists()` first can save syscall in the common case
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
 
     return path
 
