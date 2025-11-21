@@ -610,7 +610,7 @@ def is_runpod():
     Returns:
         (bool): True if running in RunPod, False otherwise.
     """
-    return "RUNPOD_POD_ID" in os.environ
+    return os.environ.get("RUNPOD_POD_ID") is not None
 
 
 def is_docker() -> bool:
