@@ -111,7 +111,7 @@ def is_ascii(s) -> bool:
     s = str(s)
 
     # Check if the string is composed of only ASCII characters
-    return all(ord(c) < 128 for c in s)
+    return s.isascii()
 
 
 def check_imgsz(imgsz, stride=32, min_dim=1, max_dim=2, floor=0):
