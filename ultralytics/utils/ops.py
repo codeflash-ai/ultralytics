@@ -422,10 +422,10 @@ def xyxy2xywh(x):
     """
     assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
     y = empty_like(x)  # faster than clone/copy
-    y[..., 0] = (x[..., 0] + x[..., 2]) / 2  # x center
-    y[..., 1] = (x[..., 1] + x[..., 3]) / 2  # y center
-    y[..., 2] = x[..., 2] - x[..., 0]  # width
-    y[..., 3] = x[..., 3] - x[..., 1]  # height
+    xy = x[..., :2]
+    wh = x[..., 2:]
+    y[..., :2] = (xy + wh) / 2
+    y[..., 2:] = wh - xy
     return y
 
 
