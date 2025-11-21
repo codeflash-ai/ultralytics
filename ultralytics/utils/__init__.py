@@ -136,6 +136,8 @@ os.environ["KINETO_LOG_LEVEL"] = "5"  # suppress verbose PyTorch profiler output
 if TQDM_RICH := str(os.getenv("YOLO_TQDM_RICH", False)).lower() == "true":
     from tqdm import rich
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-9;]*[A-Za-z]")
+
 
 class TQDM(rich.tqdm if TQDM_RICH else tqdm.tqdm):
     """
@@ -914,8 +916,7 @@ def remove_colorstr(input_string):
         >>> remove_colorstr(colorstr("blue", "bold", "hello world"))
         >>> "hello world"
     """
-    ansi_escape = re.compile(r"\x1B\[[0-9;]*[A-Za-z]")
-    return ansi_escape.sub("", input_string)
+    return _ANSI_ESCAPE_RE.sub("", input_string)
 
 
 class TryExcept(contextlib.ContextDecorator):
