@@ -445,6 +445,8 @@ class RoPEAttention(Attention):
 
     def forward(self, q: Tensor, k: Tensor, v: Tensor, num_k_exclude_rope: int = 0) -> Tensor:
         """Applies rotary position encoding and computes attention between query, key, and value tensors."""
+        device = q.device  # Cache device for efficient tensor transfer
+
         q = self.q_proj(q)
         k = self.k_proj(k)
         v = self.v_proj(v)
@@ -456,9 +458,13 @@ class RoPEAttention(Attention):
 
         # Apply rotary position encoding
         w = h = math.sqrt(q.shape[-2])
-        self.freqs_cis = self.freqs_cis.to(q.device)
+        # Only transfer freq tensor if not already on device
+        if self.freqs_cis.device != device:
+            self.freqs_cis = self.freqs_cis.to(device)
         if self.freqs_cis.shape[0] != q.shape[-2]:
-            self.freqs_cis = self.compute_cis(end_x=w, end_y=h).to(q.device)
+            self.freqs_cis = self.compute_cis(end_x=w, end_y=h)
+            if self.freqs_cis.device != device:
+                self.freqs_cis = self.freqs_cis.to(device)
         if q.shape[-2] != k.shape[-2]:
             assert self.rope_k_repeat
 
@@ -472,12 +478,15 @@ class RoPEAttention(Attention):
 
         # Attention
         _, _, _, c_per_head = q.shape
-        attn = q @ k.permute(0, 1, 3, 2)  # B x N_heads x N_tokens x N_tokens
-        attn = attn / math.sqrt(c_per_head)
-        attn = torch.softmax(attn, dim=-1)
+        c_per_head_sqrt = math.sqrt(c_per_head)
+        # Use contiguous before permute for optimal memory access
+        # attn: B x N_heads x N_tokens x N_tokens
+        attn = torch.matmul(q, k.permute(0, 1, 3, 2).contiguous())
+        attn.div_(c_per_head_sqrt)
+        torch.softmax(attn, dim=-1, out=attn)
 
         # Get output
-        out = attn @ v
+        out = torch.matmul(attn, v)
 
         out = self._recombine_heads(out)
         out = self.out_proj(out)
