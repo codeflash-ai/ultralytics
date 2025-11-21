@@ -136,6 +136,28 @@ os.environ["KINETO_LOG_LEVEL"] = "5"  # suppress verbose PyTorch profiler output
 if TQDM_RICH := str(os.getenv("YOLO_TQDM_RICH", False)).lower() == "true":
     from tqdm import rich
 
+_colors = {
+    "black": "\033[30m",  # basic colors
+    "red": "\033[31m",
+    "green": "\033[32m",
+    "yellow": "\033[33m",
+    "blue": "\033[34m",
+    "magenta": "\033[35m",
+    "cyan": "\033[36m",
+    "white": "\033[37m",
+    "bright_black": "\033[90m",  # bright colors
+    "bright_red": "\033[91m",
+    "bright_green": "\033[92m",
+    "bright_yellow": "\033[93m",
+    "bright_blue": "\033[94m",
+    "bright_magenta": "\033[95m",
+    "bright_cyan": "\033[96m",
+    "bright_white": "\033[97m",
+    "end": "\033[0m",  # misc
+    "bold": "\033[1m",
+    "underline": "\033[4m",
+}
+
 
 class TQDM(rich.tqdm if TQDM_RICH else tqdm.tqdm):
     """
@@ -848,7 +870,7 @@ SETTINGS_FILE = USER_CONFIG_DIR / "settings.json"
 
 
 def colorstr(*input):
-    r"""
+    """
     Colors a string based on the provided color and style arguments. Utilizes ANSI escape codes.
     See https://en.wikipedia.org/wiki/ANSI_escape_code for more details.
 
@@ -876,28 +898,11 @@ def colorstr(*input):
         >>> "\033[34m\033[1mhello world\033[0m"
     """
     *args, string = input if len(input) > 1 else ("blue", "bold", input[0])  # color arguments, string
-    colors = {
-        "black": "\033[30m",  # basic colors
-        "red": "\033[31m",
-        "green": "\033[32m",
-        "yellow": "\033[33m",
-        "blue": "\033[34m",
-        "magenta": "\033[35m",
-        "cyan": "\033[36m",
-        "white": "\033[37m",
-        "bright_black": "\033[90m",  # bright colors
-        "bright_red": "\033[91m",
-        "bright_green": "\033[92m",
-        "bright_yellow": "\033[93m",
-        "bright_blue": "\033[94m",
-        "bright_magenta": "\033[95m",
-        "bright_cyan": "\033[96m",
-        "bright_white": "\033[97m",
-        "end": "\033[0m",  # misc
-        "bold": "\033[1m",
-        "underline": "\033[4m",
-    }
-    return "".join(colors[x] for x in args) + f"{string}" + colors["end"]
+
+    # Efficient ANSI code concatenation using list comprehension and module-level dictionary
+    # Avoids function call overhead of generator in join
+    codes = [_colors[x] for x in args]
+    return "".join(codes) + f"{string}" + _colors["end"]
 
 
 def remove_colorstr(input_string):
