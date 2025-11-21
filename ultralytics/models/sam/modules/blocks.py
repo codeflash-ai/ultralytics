@@ -87,11 +87,14 @@ class MaskDownSampler(nn.Module):
         super().__init__()
         num_layers = int(math.log2(total_stride) // math.log2(stride))
         assert stride**num_layers == total_stride
-        self.encoder = nn.Sequential()
-        mask_in_chans, mask_out_chans = 1, 1
+
+        # Precompute all out_channels up front for better clarity and efficient loop
+        mask_in_chans = 1
+        encoder_layers = []
+
         for _ in range(num_layers):
             mask_out_chans = mask_in_chans * (stride**2)
-            self.encoder.append(
+            encoder_layers.append(
                 nn.Conv2d(
                     mask_in_chans,
                     mask_out_chans,
@@ -100,11 +103,14 @@ class MaskDownSampler(nn.Module):
                     padding=padding,
                 )
             )
-            self.encoder.append(LayerNorm2d(mask_out_chans))
-            self.encoder.append(activation())
+            encoder_layers.append(LayerNorm2d(mask_out_chans))
+            encoder_layers.append(activation())
             mask_in_chans = mask_out_chans
 
-        self.encoder.append(nn.Conv2d(mask_out_chans, embed_dim, kernel_size=1))
+        encoder_layers.append(nn.Conv2d(mask_in_chans, embed_dim, kernel_size=1))
+
+        # Using nn.Sequential(*layers) is faster than dynamically appending to .encoder
+        self.encoder = nn.Sequential(*encoder_layers)
 
     def forward(self, x):
         """Downsamples and encodes input mask to embed_dim channels using convolutional layers and LayerNorm2d."""
