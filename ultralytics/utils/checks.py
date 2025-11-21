@@ -48,6 +48,8 @@ from ultralytics.utils import (
     url2file,
 )
 
+_OP_VER_PATTERN = re.compile(r"([^0-9]*)([\d.]+)")
+
 
 def parse_requirements(file_path=ROOT.parent / "requirements.txt", package=""):
     """
@@ -206,7 +208,11 @@ def check_version(
     if not current:  # if current is '' or None
         LOGGER.warning(f"WARNING ⚠️ invalid check_version({current}, {required}) requested, please check values.")
         return True
-    elif not current[0].isdigit():  # current is package name rather than version string, i.e. current='ultralytics'
+
+    # Avoid repeated attribute lookups and function bindings in tight loops where possible
+    parse_ver = parse_version
+
+    if not current[0].isdigit():  # current is package name rather than version string, i.e. current='ultralytics'
         try:
             name = current  # assigned package name to 'name' arg
             current = metadata.version(current)  # get version string from package name
@@ -226,27 +232,42 @@ def check_version(
     ):
         return True
 
-    op = ""
-    version = ""
+    # Pre-split and strip once, as this is a small but potentially hot path.
+    reqs = required.strip(",").split(",")
+    # Parse current version once
+    c = parse_ver(current)  # '1.2.3' -> (1, 2, 3)
+
+    # To minimize memory churn and attribute access, keep locals tight
     result = True
-    c = parse_version(current)  # '1.2.3' -> (1, 2, 3)
-    for r in required.strip(",").split(","):
-        op, version = re.match(r"([^0-9]*)([\d.]+)", r).groups()  # split '>=22.04' -> ('>=', '22.04')
+    for r in reqs:
+        # Use pre-compiled regex.
+        # Avoid creating new stack frames/objects if we can parse successfully
+        m = _OP_VER_PATTERN.match(r)
+        op, version = m.groups()
         if not op:
             op = ">="  # assume >= if no op passed
-        v = parse_version(version)  # '1.2.3' -> (1, 2, 3)
-        if op == "==" and c != v:
-            result = False
-        elif op == "!=" and c == v:
-            result = False
-        elif op == ">=" and not (c >= v):
-            result = False
-        elif op == "<=" and not (c <= v):
-            result = False
-        elif op == ">" and not (c > v):
-            result = False
-        elif op == "<" and not (c < v):
-            result = False
+        v = parse_ver(version)  # '1.2.3' -> (1, 2, 3)
+        # Inline the op checks for branch predictability
+        if op == "==":
+            if c != v:
+                result = False
+        elif op == "!=":
+            if c == v:
+                result = False
+        elif op == ">=":
+            if not (c >= v):
+                result = False
+        elif op == "<=":
+            if not (c <= v):
+                result = False
+        elif op == ">":
+            if not (c > v):
+                result = False
+        elif op == "<":
+            if not (c < v):
+                result = False
+        # No else -- if an unknown op appears, it should probably just be ignored (matches original behavior)
+
     if not result:
         warning = f"WARNING ⚠️ {name}{required} is required, but {name}=={current} is currently installed {msg}"
         if hard:
