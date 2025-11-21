@@ -779,6 +779,14 @@ def get_default_args(func):
     Returns:
         (dict): A dictionary where each key is a parameter name, and each value is the default value of that parameter.
     """
+    if inspect.isfunction(func) or inspect.ismethod(func):
+        code = func.__code__
+        defaults = func.__defaults__ or ()
+        kwdefaults = func.__kwdefaults__ or {}
+        arg_names = code.co_varnames[: code.co_argcount]
+        n_defaults = len(defaults)
+        pos_defaults = dict(zip(arg_names[-n_defaults:], defaults)) if n_defaults else {}
+        return {**pos_defaults, **kwdefaults}
     signature = inspect.signature(func)
     return {k: v.default for k, v in signature.parameters.items() if v.default is not inspect.Parameter.empty}
 
