@@ -848,22 +848,31 @@ class PositionEmbeddingRandom(nn.Module):
         """Encodes normalized [0,1] coordinates using random spatial frequencies."""
         # Assuming coords are in [0, 1]^2 square and have d_1 x ... x d_n x 2 shape
         coords = 2 * coords - 1
-        coords = coords @ self.positional_encoding_gaussian_matrix
-        coords = 2 * np.pi * coords
-        # Outputs d_1 x ... x d_n x C shape
-        return torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1)
+        # Fused matmul and scaling for performance
+        coords = torch.matmul(coords, self.positional_encoding_gaussian_matrix)
+        coords.mul_(2 * np.pi)
+        # Avoid constructing lists for cat -- use torch.stack and view for channel splitting
+        sin_coords = torch.sin(coords)
+        cos_coords = torch.cos(coords)
+        # Directly concatenate along last dim
+        return torch.cat((sin_coords, cos_coords), dim=-1)
 
     def forward(self, size: Tuple[int, int]) -> torch.Tensor:
         """Generates positional encoding for a grid using random spatial frequencies."""
         h, w = size
         device: Any = self.positional_encoding_gaussian_matrix.device
-        grid = torch.ones((h, w), device=device, dtype=torch.float32)
-        y_embed = grid.cumsum(dim=0) - 0.5
-        x_embed = grid.cumsum(dim=1) - 0.5
-        y_embed = y_embed / h
-        x_embed = x_embed / w
 
-        pe = self._pe_encoding(torch.stack([x_embed, y_embed], dim=-1))
+        # Use torch.arange instead of ones + cumsum for faster embedding grid construction
+        # y_embed: (h, 1), x_embed: (1, w)
+        y_range = (torch.arange(h, device=device, dtype=torch.float32) + 0.5) / h  # (h,)
+        x_range = (torch.arange(w, device=device, dtype=torch.float32) + 0.5) / w  # (w,)
+        # Broadcast to (h, w)
+        y_embed = y_range[:, None].expand(h, w)
+        x_embed = x_range[None, :].expand(h, w)
+
+        # Stack so shape is (h, w, 2) as expected by _pe_encoding
+        coords = torch.stack((x_embed, y_embed), dim=-1)
+        pe = self._pe_encoding(coords)
         return pe.permute(2, 0, 1)  # C x H x W
 
     def forward_with_coords(self, coords_input: torch.Tensor, image_size: Tuple[int, int]) -> torch.Tensor:
