@@ -48,6 +48,8 @@ from ultralytics.utils import (
     url2file,
 )
 
+_version_re = re.compile(r"\d+")
+
 
 def parse_requirements(file_path=ROOT.parent / "requirements.txt", package=""):
     """
@@ -91,7 +93,8 @@ def parse_version(version="0.0.0") -> tuple:
         (tuple): Tuple of integers representing the numeric part of the version, i.e. (2, 0, 1)
     """
     try:
-        return tuple(map(int, re.findall(r"\d+", version)[:3]))  # '2.0.1+cpu' -> (2, 0, 1)
+        # Use pre-compiled regex for performance
+        return tuple(map(int, _version_re.findall(version)[:3]))  # '2.0.1+cpu' -> (2, 0, 1)
     except Exception as e:
         LOGGER.warning(f"WARNING ⚠️ failure for parse_version({version}), returning (0, 0, 0): {e}")
         return 0, 0, 0
