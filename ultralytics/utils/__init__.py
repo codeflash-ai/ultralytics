@@ -1317,12 +1317,18 @@ def deprecation_warn(arg, new_arg=None):
 
 def clean_url(url):
     """Strip auth from URL, i.e. https://url.com/file.txt?auth -> https://url.com/file.txt."""
-    url = Path(url).as_posix().replace(":/", "://")  # Pathlib turns :// -> :/, as_posix() for Windows
-    return unquote(url).split("?")[0]  # '%2F' to '/', split https://url.com/file.txt?auth
+    if "://" in url:
+        # For URLs, just fix potential :/ -> :// conversion without Path overhead
+        url = url.replace(":/", "://")
+    else:
+        # Only use Path for local file paths
+        url = Path(url).as_posix()
+    return unquote(url).split("?")[0]
 
 
 def url2file(url):
     """Convert URL to filename, i.e. https://url.com/file.txt?auth -> file.txt."""
+    # Avoid creating Path object twice by directly extracting .name using Path on clean_url
     return Path(clean_url(url)).name
 
 
