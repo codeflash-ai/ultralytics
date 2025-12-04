@@ -113,22 +113,31 @@ class KalmanFilterXYAH:
             >>> covariance = np.eye(8)
             >>> predicted_mean, predicted_covariance = kf.predict(mean, covariance)
         """
-        std_pos = [
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[3],
-            1e-2,
-            self._std_weight_position * mean[3],
-        ]
-        std_vel = [
-            self._std_weight_velocity * mean[3],
-            self._std_weight_velocity * mean[3],
-            1e-5,
-            self._std_weight_velocity * mean[3],
-        ]
-        motion_cov = np.diag(np.square(np.r_[std_pos, std_vel]))
+        # Precompute commonly used value
+        h = mean[3]
+        pos = self._std_weight_position * h
+        vel = self._std_weight_velocity * h
 
-        mean = np.dot(mean, self._motion_mat.T)
-        covariance = np.linalg.multi_dot((self._motion_mat, covariance, self._motion_mat.T)) + motion_cov
+        # Construct std arrays directly (avoiding temporary lists and np.r_)
+        std_values = np.empty(8, dtype=np.float64)
+        std_values[0:2] = pos
+        std_values[2] = 1e-2
+        std_values[3] = pos
+        std_values[4:6] = vel
+        std_values[6] = 1e-5
+        std_values[7] = vel
+
+        # Square standard deviations and set diagonal more efficiently
+        std_values_squared = std_values * std_values
+        motion_cov = np.diag(std_values_squared)
+
+        # Use fast matrix multiplication (avoid np.dot for clarity, use @ instead)
+        mean = mean @ self._motion_mat.T
+
+        # Use np.matmul for 2D arrays (multi_dot is overkill for this)
+        cov_tmp = self._motion_mat @ covariance
+        covariance = cov_tmp @ self._motion_mat.T
+        covariance += motion_cov
 
         return mean, covariance
 
