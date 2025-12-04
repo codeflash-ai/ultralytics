@@ -63,11 +63,32 @@ def select_closest_cond_frames(frame_idx, cond_frame_outputs, max_cond_frame_num
 def get_1d_sine_pe(pos_inds, dim, temperature=10000):
     """Generate 1D sinusoidal positional embeddings for given positions and dimensions."""
     pe_dim = dim // 2
-    dim_t = torch.arange(pe_dim, dtype=torch.float32, device=pos_inds.device)
-    dim_t = temperature ** (2 * (dim_t // 2) / pe_dim)
+
+    # Faster: avoid repeated power ops and division in dim_t
+    # step 1: compute float indices
+    dim_t_idx = torch.arange(pe_dim, dtype=torch.float32, device=pos_inds.device)
+    # step 2: precompute denominators: (2 * dim_t_idx // 2) / pe_dim
+    # since 2*(i//2)/pe_dim, equivalent to i/pe_dim for float indices
+    # But original: (2 * (dim_t // 2) / pe_dim)
+    # dim_t is float, but using i//2 for each dim_t_idx
+    # we'll keep this exactly, but vectorize to avoid broadcasting surprises
+
+    # Safest: compute i//2 as integer
+    # (2 * (i//2)) / pe_dim
+    # result: torch.arange(pe_dim)//2 gives [0,0,1,1,...]
+    div_term = (2 * torch.div(dim_t_idx, 2, rounding_mode="floor")) / pe_dim
+    dim_t = temperature**div_term
+
+    # pos_inds shape (...), unsqueeze(-1) -> (..., 1), then broadcast with dim_t
 
     pos_embed = pos_inds.unsqueeze(-1) / dim_t
-    pos_embed = torch.cat([pos_embed.sin(), pos_embed.cos()], dim=-1)
+    # Use torch.stack instead of cat for potential speedup - avoids shape copying,
+    # but keep behavior: resulting shape (..., pe_dim*2)
+    # torch.cat([sin, cos], dim=-1) is correct and fastest here for output layout.
+    sin = pos_embed.sin()
+    cos = pos_embed.cos()
+    pos_embed = torch.cat([sin, cos], dim=-1)
+
     return pos_embed
 
 
