@@ -225,14 +225,14 @@ class KalmanFilterXYAH:
         """
         projected_mean, projected_cov = self.project(mean, covariance)
 
+        cov_update = np.dot(covariance, self._update_mat.T)
         chol_factor, lower = scipy.linalg.cho_factor(projected_cov, lower=True, check_finite=False)
-        kalman_gain = scipy.linalg.cho_solve(
-            (chol_factor, lower), np.dot(covariance, self._update_mat.T).T, check_finite=False
-        ).T
+        kalman_gain = scipy.linalg.cho_solve((chol_factor, lower), cov_update.T, check_finite=False, overwrite_b=True).T
         innovation = measurement - projected_mean
 
         new_mean = mean + np.dot(innovation, kalman_gain.T)
-        new_covariance = covariance - np.linalg.multi_dot((kalman_gain, projected_cov, kalman_gain.T))
+        cov_prod = np.matmul(kalman_gain, projected_cov)
+        new_covariance = covariance - np.matmul(cov_prod, kalman_gain.T)
         return new_mean, new_covariance
 
     def gating_distance(
