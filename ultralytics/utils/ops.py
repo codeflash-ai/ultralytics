@@ -422,10 +422,14 @@ def xyxy2xywh(x):
     """
     assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
     y = empty_like(x)  # faster than clone/copy
-    y[..., 0] = (x[..., 0] + x[..., 2]) / 2  # x center
-    y[..., 1] = (x[..., 1] + x[..., 3]) / 2  # y center
-    y[..., 2] = x[..., 2] - x[..., 0]  # width
-    y[..., 3] = x[..., 3] - x[..., 1]  # height
+    if hasattr(x, "dtype") and "torch" in str(type(x)):
+        # torch.Tensor path
+        y[..., 0:2] = (x[..., 0:2] + x[..., 2:4]) / 2
+        y[..., 2:4] = x[..., 2:4] - x[..., 0:2]
+    else:
+        # numpy path
+        y[..., 0:2] = (x[..., 0:2] + x[..., 2:4]) / 2
+        y[..., 2:4] = x[..., 2:4] - x[..., 0:2]
     return y
 
 
