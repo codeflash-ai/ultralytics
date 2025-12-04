@@ -52,9 +52,10 @@ class KalmanFilterXYAH:
         ndim, dt = 4, 1.0
 
         # Create Kalman filter model matrices
-        self._motion_mat = np.eye(2 * ndim, 2 * ndim)
-        for i in range(ndim):
-            self._motion_mat[i, ndim + i] = dt
+        mat = np.eye(2 * ndim, 2 * ndim)
+        idx = np.arange(ndim)
+        mat[idx, ndim + idx] = dt  # vectorized instead of loop
+        self._motion_mat = mat
         self._update_mat = np.eye(ndim, 2 * ndim)
 
         # Motion and observation uncertainty are chosen relative to the current state estimate
@@ -80,19 +81,22 @@ class KalmanFilterXYAH:
         """
         mean_pos = measurement
         mean_vel = np.zeros_like(mean_pos)
-        mean = np.r_[mean_pos, mean_vel]
+        mean = np.concatenate((mean_pos, mean_vel), axis=0)  # slightly faster than np.r_
 
-        std = [
-            2 * self._std_weight_position * measurement[3],
-            2 * self._std_weight_position * measurement[3],
-            1e-2,
-            2 * self._std_weight_position * measurement[3],
-            10 * self._std_weight_velocity * measurement[3],
-            10 * self._std_weight_velocity * measurement[3],
-            1e-5,
-            10 * self._std_weight_velocity * measurement[3],
-        ]
-        covariance = np.diag(np.square(std))
+        h = measurement[3]
+        std = np.array(
+            [
+                2 * self._std_weight_position * h,
+                2 * self._std_weight_position * h,
+                1e-2,
+                2 * self._std_weight_position * h,
+                10 * self._std_weight_velocity * h,
+                10 * self._std_weight_velocity * h,
+                1e-5,
+                10 * self._std_weight_velocity * h,
+            ]
+        )
+        covariance = np.diag(std * std)
         return mean, covariance
 
     def predict(self, mean: np.ndarray, covariance: np.ndarray):
