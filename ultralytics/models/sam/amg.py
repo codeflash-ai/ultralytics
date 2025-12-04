@@ -1,7 +1,6 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
 import math
-from itertools import product
 from typing import Any, Generator, List, Tuple
 
 import numpy as np
@@ -106,6 +105,20 @@ def generate_crop_boxes(
         """Calculates the length of each crop given the original length, number of crops, and overlap."""
         return int(math.ceil((overlap * (n_crops - 1) + orig_len) / n_crops))
 
+    # Preallocate estimated size for append efficiency
+    estimated_crops = 1
+    for i_layer in range(n_layers):
+        n_crops_per_side = 2 ** (i_layer + 1)
+        estimated_crops += n_crops_per_side**2
+    crop_boxes.reserve(estimated_crops) if hasattr(crop_boxes, "reserve") else None
+    layer_idxs.reserve(estimated_crops) if hasattr(layer_idxs, "reserve") else None
+
+    # Reuse local variables and reduce attribute lookups
+    append_crop_box = crop_boxes.append
+    append_layer_idx = layer_idxs.append
+    min_im_w = im_w
+    min_im_h = im_h
+
     for i_layer in range(n_layers):
         n_crops_per_side = 2 ** (i_layer + 1)
         overlap = int(overlap_ratio * short_side * (2 / n_crops_per_side))
@@ -113,14 +126,31 @@ def generate_crop_boxes(
         crop_w = crop_len(im_w, n_crops_per_side, overlap)
         crop_h = crop_len(im_h, n_crops_per_side, overlap)
 
-        crop_box_x0 = [int((crop_w - overlap) * i) for i in range(n_crops_per_side)]
-        crop_box_y0 = [int((crop_h - overlap) * i) for i in range(n_crops_per_side)]
+        # Use range directly instead of list comprehensions if possible
+        step_x = crop_w - overlap
+        step_y = crop_h - overlap
 
-        # Crops in XYWH format
-        for x0, y0 in product(crop_box_x0, crop_box_y0):
-            box = [x0, y0, min(x0 + crop_w, im_w), min(y0 + crop_h, im_h)]
-            crop_boxes.append(box)
-            layer_idxs.append(i_layer + 1)
+        # Precompute crop_box_x0/crop_box_y0 into tuples (small performance gain)
+        crop_box_x0 = tuple(step_x * i for i in range(n_crops_per_side))
+        crop_box_y0 = tuple(step_y * i for i in range(n_crops_per_side))
+
+        box_layer = i_layer + 1
+        min_add_crop_w = min_im_w
+        min_add_crop_h = min_im_h
+        add = append_crop_box
+        add_idx = append_layer_idx
+
+        # Move min out of inner loop, precompute upper bounds, and avoid list allocations
+        for x0 in crop_box_x0:
+            x1 = x0 + crop_w
+            x1_clipped = x1 if x1 <= min_add_crop_w else min_add_crop_w
+            for y0 in crop_box_y0:
+                y1 = y0 + crop_h
+                y1_clipped = y1 if y1 <= min_add_crop_h else min_add_crop_h
+
+                # box = [x0, y0, min(x0 + crop_w, im_w), min(y0 + crop_h, im_h)]
+                add([x0, y0, x1_clipped, y1_clipped])
+                add_idx(box_layer)
 
     return crop_boxes, layer_idxs
 
