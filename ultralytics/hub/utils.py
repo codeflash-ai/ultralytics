@@ -99,9 +99,16 @@ def requests_with_progress(method, url, **kwargs):
     response = requests.request(method, url, stream=True, **kwargs)
     total = int(response.headers.get("content-length", 0) if isinstance(progress, bool) else progress)  # total size
     try:
-        pbar = TQDM(total=total, unit="B", unit_scale=True, unit_divisor=1024)
-        for data in response.iter_content(chunk_size=1024):
-            pbar.update(len(data))
+        # Reduce TQDM overhead by using disable if no total known (0 disables bar rendering logic)
+        disable_pbar = total == 0
+        # Pre-allocate local for "update" method to avoid attribute lookups in the loop
+        pbar = TQDM(total=total, unit="B", unit_scale=True, unit_divisor=1024, disable=disable_pbar)
+        pbar_update = pbar.update
+        # Use an explicit local for chunk_size for slightly faster iter_content()
+        chunk_size = 1024
+        for data in response.iter_content(chunk_size=chunk_size):
+            if data:  # Avoid empty chunks
+                pbar_update(len(data))
         pbar.close()
     except requests.exceptions.ChunkedEncodingError:  # avoid 'Connection broken: IncompleteRead' warnings
         response.close()
