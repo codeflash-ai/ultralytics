@@ -27,4 +27,11 @@ class AGLU(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Compute the forward pass of the Unified activation function."""
         lam = torch.clamp(self.lambd, min=0.0001)  # Clamp lambda to avoid division by zero
-        return torch.exp((1 / lam) * self.act((self.kappa * x) - torch.log(lam)))
+        inv_lam = lam.reciprocal()  # More efficient than (1 / lam)
+        log_lam = lam.log()  # More efficient than torch.log(lam) per call
+
+        # Fused arithmetic operations leveraging PyTorch's broadcasting and in-place computations
+        kappa_x = self.kappa * x
+        splus = self.act(kappa_x.sub_(log_lam))  # in-place subtraction (log_lam is scalar)
+        exp_input = inv_lam * splus
+        return exp_input.exp()
