@@ -52,9 +52,10 @@ class KalmanFilterXYAH:
         ndim, dt = 4, 1.0
 
         # Create Kalman filter model matrices
-        self._motion_mat = np.eye(2 * ndim, 2 * ndim)
-        for i in range(ndim):
-            self._motion_mat[i, ndim + i] = dt
+        motion_mat = np.eye(2 * ndim, 2 * ndim)
+        idx_range = np.arange(ndim)
+        motion_mat[idx_range, ndim + idx_range] = dt
+        self._motion_mat = motion_mat
         self._update_mat = np.eye(ndim, 2 * ndim)
 
         # Motion and observation uncertainty are chosen relative to the current state estimate
@@ -150,17 +151,21 @@ class KalmanFilterXYAH:
             >>> covariance = np.eye(8)
             >>> projected_mean, projected_covariance = kf.project(mean, covariance)
         """
-        std = [
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[3],
-            1e-1,
-            self._std_weight_position * mean[3],
-        ]
-        innovation_cov = np.diag(np.square(std))
+        h = mean[3]
+        std = np.array(
+            [
+                self._std_weight_position * h,
+                self._std_weight_position * h,
+                1e-1,
+                self._std_weight_position * h,
+            ]
+        )
+        innovation_cov = np.diag(std * std)
 
-        mean = np.dot(self._update_mat, mean)
-        covariance = np.linalg.multi_dot((self._update_mat, covariance, self._update_mat.T))
-        return mean, covariance + innovation_cov
+        # Use explicit dot for projected mean and covariance
+        projected_mean = self._update_mat @ mean
+        projected_covariance = self._update_mat @ covariance @ self._update_mat.T
+        return projected_mean, projected_covariance + innovation_cov
 
     def multi_predict(self, mean: np.ndarray, covariance: np.ndarray):
         """
@@ -270,18 +275,23 @@ class KalmanFilterXYAH:
             >>> measurements = np.array([[1, 1, 1, 1], [2, 2, 1, 1]])
             >>> distances = kf.gating_distance(mean, covariance, measurements, only_position=False, metric="maha")
         """
-        mean, covariance = self.project(mean, covariance)
+        projected_mean, projected_covariance = self.project(mean, covariance)
         if only_position:
-            mean, covariance = mean[:2], covariance[:2, :2]
+            projected_mean = projected_mean[:2]
+            projected_covariance = projected_covariance[:2, :2]
             measurements = measurements[:, :2]
 
-        d = measurements - mean
+        d = measurements - projected_mean
+
         if metric == "gaussian":
-            return np.sum(d * d, axis=1)
+            # Fast Euclidean distance computation
+            return np.einsum("ij,ij->i", d, d)
         elif metric == "maha":
-            cholesky_factor = np.linalg.cholesky(covariance)
+            # Cholesky decomposition can be reused across batch by in-place overwrite of b
+            cholesky_factor = np.linalg.cholesky(projected_covariance)
             z = scipy.linalg.solve_triangular(cholesky_factor, d.T, lower=True, check_finite=False, overwrite_b=True)
-            return np.sum(z * z, axis=0)  # square maha
+            # z shape: (n_dim, n_measurements), sum rows for each measurement
+            return np.einsum("ij,ij->j", z, z)
         else:
             raise ValueError("Invalid distance metric")
 
