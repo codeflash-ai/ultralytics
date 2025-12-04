@@ -107,6 +107,11 @@ def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xyw
     Returns:
         (torch.Tensor): The scaled bounding boxes, in the format of (x1, y1, x2, y2).
     """
+    # Fast path: if ratio_pad is identity, no need to recalc gain, pad
+    if ratio_pad is not None and ratio_pad[0][0] == 1.0 and ratio_pad[1][0] == 0 and ratio_pad[1][1] == 0:
+        # No scaling or padding was applied during resize/augment
+        return clip_boxes(boxes, img0_shape)
+
     if ratio_pad is None:  # calculate from img0_shape
         gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])  # gain  = old / new
         pad = (
@@ -118,12 +123,13 @@ def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xyw
         pad = ratio_pad[1]
 
     if padding:
-        boxes[..., 0] -= pad[0]  # x padding
-        boxes[..., 1] -= pad[1]  # y padding
+        boxes[..., 0].sub_(pad[0])
+        boxes[..., 1].sub_(pad[1])
         if not xywh:
-            boxes[..., 2] -= pad[0]  # x padding
-            boxes[..., 3] -= pad[1]  # y padding
-    boxes[..., :4] /= gain
+            boxes[..., 2].sub_(pad[0])
+            boxes[..., 3].sub_(pad[1])
+
+    boxes[..., :4].div_(gain)
     return clip_boxes(boxes, img0_shape)
 
 
