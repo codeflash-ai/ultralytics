@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from typing import Any, List, Optional
 
 import cv2
-import numpy as np
 
 from ultralytics.utils import LOGGER, RANK, SETTINGS, TESTS_RUNNING, ops
 from ultralytics.utils.metrics import ClassifyMetrics, DetMetrics, OBBMetrics, PoseMetrics, SegmentMetrics
@@ -242,8 +241,12 @@ def _extract_segmentation_annotation(segmentation_raw: str, decode: Callable) ->
     try:
         mask = decode(segmentation_raw)
         contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        annotations = [np.array(polygon).squeeze() for polygon in contours if len(polygon) >= 3]
-        return [annotation.ravel().tolist() for annotation in annotations]
+        out: List[List[Any]] = []
+        for polygon in contours:
+            if len(polygon) >= 3:
+                flat = polygon.reshape(-1)
+                out.append(flat.tolist())
+        return out
     except Exception as e:
         LOGGER.warning(f"COMET WARNING: Failed to extract segmentation annotation: {e}")
     return None
