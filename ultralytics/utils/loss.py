@@ -117,17 +117,31 @@ class RotatedBboxLoss(BboxLoss):
 
     def forward(self, pred_dist, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask):
         """Compute IoU and DFL losses for rotated bounding boxes."""
-        weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
-        iou = probiou(pred_bboxes[fg_mask], target_bboxes[fg_mask])
-        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        # Precompute indices once for foreground objects
+        if fg_mask is not None and fg_mask.any():
+            # Gather masked tensors in advance for multiple uses
+            masked_target_scores = target_scores.sum(-1)[fg_mask]
+            weight = masked_target_scores.unsqueeze(-1)
+            masked_pred_bboxes = pred_bboxes[fg_mask]
+            masked_target_bboxes = target_bboxes[fg_mask]
 
-        # DFL loss
-        if self.dfl_loss:
-            target_ltrb = bbox2dist(anchor_points, xywh2xyxy(target_bboxes[..., :4]), self.dfl_loss.reg_max - 1)
-            loss_dfl = self.dfl_loss(pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max), target_ltrb[fg_mask]) * weight
-            loss_dfl = loss_dfl.sum() / target_scores_sum
+            iou = probiou(masked_pred_bboxes, masked_target_bboxes)
+            loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+
+            # DFL loss
+            if self.dfl_loss:
+                # Mask channel dims for xywh2xyxy and bbox2dist only once
+                target_ltrb = bbox2dist(anchor_points, xywh2xyxy(target_bboxes[..., :4]), self.dfl_loss.reg_max - 1)
+                masked_pred_dist = pred_dist[fg_mask].view(-1, self.dfl_loss.reg_max)
+                masked_target_ltrb = target_ltrb[fg_mask]
+                loss_dfl = self.dfl_loss(masked_pred_dist, masked_target_ltrb) * weight
+                loss_dfl = loss_dfl.sum() / target_scores_sum
+            else:
+                loss_dfl = torch.tensor(0.0, device=pred_dist.device)
         else:
-            loss_dfl = torch.tensor(0.0).to(pred_dist.device)
+            # fg_mask is empty or None: return zeros
+            loss_iou = torch.tensor(0.0, device=pred_dist.device)
+            loss_dfl = torch.tensor(0.0, device=pred_dist.device)
 
         return loss_iou, loss_dfl
 
