@@ -106,7 +106,8 @@ class PoseValidator(DetectionValidator):
         """Prepare and scale keypoints in predictions for pose processing."""
         predn = super()._prepare_pred(pred, pbatch)
         nk = pbatch["kpts"].shape[1]
-        pred_kpts = predn[:, 6:].view(len(predn), nk, -1)
+        # Batch view and keypoint extraction in one step
+        pred_kpts = predn[:, 6:].view(predn.size(0), nk, -1)
         ops.scale_coords(pbatch["imgsz"], pred_kpts, pbatch["ori_shape"], ratio_pad=pbatch["ratio_pad"])
         return predn, pred_kpts
 
