@@ -66,10 +66,22 @@ def multi_scale_deformable_attn_pytorch(
     """
     bs, _, num_heads, embed_dims = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
-    value_list = value.split([H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
+
+    # Pre-compute H_*W_ to avoid recomputation in the split
+    spatial_sizes = value_spatial_shapes[:, 0] * value_spatial_shapes[:, 1]
+    value_list = value.split(spatial_sizes.tolist(), dim=1)
     sampling_grids = 2 * sampling_locations - 1
     sampling_value_list = []
-    for level, (H_, W_) in enumerate(value_spatial_shapes):
+
+    # Reduce attribute lookups outside the loop
+    stack = torch.stack
+    flatten = torch.Tensor.flatten
+
+    # Use local variables for shape attributes for further speed
+    H_W = value_spatial_shapes.tolist()  # Avoid dereferencing tensor inside loop
+
+    for level in range(num_levels):
+        H_, W_ = H_W[level]
         # bs, H_*W_, num_heads, embed_dims ->
         # bs, H_*W_, num_heads*embed_dims ->
         # bs, num_heads*embed_dims, H_*W_ ->
@@ -87,12 +99,14 @@ def multi_scale_deformable_attn_pytorch(
     # (bs, num_queries, num_heads, num_levels, num_points) ->
     # (bs, num_heads, num_queries, num_levels, num_points) ->
     # (bs, num_heads, 1, num_queries, num_levels*num_points)
+
+    # Combine sampling_value_list early, to avoid stack inside sum computation
+    # This avoids repeated device lookups
+    sampling_values = stack(sampling_value_list, dim=-2).flatten(-2)
+
+    # Compute attention_weights shape efficiently
     attention_weights = attention_weights.transpose(1, 2).reshape(
         bs * num_heads, 1, num_queries, num_levels * num_points
     )
-    output = (
-        (torch.stack(sampling_value_list, dim=-2).flatten(-2) * attention_weights)
-        .sum(-1)
-        .view(bs, num_heads * embed_dims, num_queries)
-    )
+    output = (sampling_values * attention_weights).sum(-1).view(bs, num_heads * embed_dims, num_queries)
     return output.transpose(1, 2).contiguous()
