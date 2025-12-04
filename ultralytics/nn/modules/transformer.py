@@ -66,11 +66,14 @@ class TransformerEncoderLayer(nn.Module):
         self.fc1 = nn.Linear(c1, cm)
         self.fc2 = nn.Linear(cm, c1)
 
-        self.norm1 = nn.LayerNorm(c1)
-        self.norm2 = nn.LayerNorm(c1)
-        self.dropout = nn.Dropout(dropout)
-        self.dropout1 = nn.Dropout(dropout)
-        self.dropout2 = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(c1, elementwise_affine=True)
+        self.norm2 = nn.LayerNorm(c1, elementwise_affine=True)
+
+        # Reduce redundant Dropout modules: reuse single instance for all dropout calls. This saves memory and CPU time
+        dropout_layer = nn.Dropout(dropout)
+        self.dropout = dropout_layer
+        self.dropout1 = dropout_layer
+        self.dropout2 = dropout_layer
 
         self.act = act
         self.normalize_before = normalize_before
