@@ -416,17 +416,32 @@ class KalmanFilterXYWH(KalmanFilterXYAH):
             >>> covariance = np.eye(8)
             >>> projected_mean, projected_cov = kf.project(mean, covariance)
         """
-        std = [
-            self._std_weight_position * mean[2],
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[2],
-            self._std_weight_position * mean[3],
-        ]
-        innovation_cov = np.diag(np.square(std))
 
-        mean = np.dot(self._update_mat, mean)
-        covariance = np.linalg.multi_dot((self._update_mat, covariance, self._update_mat.T))
-        return mean, covariance + innovation_cov
+        # Compute std vector only once and directly with numpy for maximum efficiency
+        std_weight_position = self._std_weight_position
+        # mean[2] and mean[3] reused
+        w = mean[2]
+        h = mean[3]
+        std = np.array(
+            [std_weight_position * w, std_weight_position * h, std_weight_position * w, std_weight_position * h]
+        )
+
+        # Avoid unnecessary np.square and np.diag creation by using out param in np.square,
+        # and directly allocating the 4x4 diagonal matrix.
+        # This is faster than the Python list and avoids extra conversions.
+        std_sq = std * std
+        # Allocate diagonal directly without np.diag for small dim
+        innovation_cov = np.zeros((4, 4), dtype=std_sq.dtype)
+        innovation_cov.flat[::5] = std_sq  # equivalent to np.diag(std_sq)
+
+        # Precompute _update_mat @ mean
+        mean_proj = self._update_mat @ mean
+
+        # For covariance, use matmul instead of np.linalg.multi_dot for 3 args
+        # Since _update_mat is likely 4x8 and covariance is 8x8, _update_mat @ covariance @ _update_mat.T is more efficient
+        cov_proj = self._update_mat @ covariance @ self._update_mat.T
+
+        return mean_proj, cov_proj + innovation_cov
 
     def multi_predict(self, mean, covariance):
         """
