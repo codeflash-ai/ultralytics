@@ -97,7 +97,7 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     ndim = x.ndim
     assert 0 <= 1 < ndim
     assert freqs_cis.shape == (x.shape[-2], x.shape[-1])
-    shape = [d if i >= ndim - 2 else 1 for i, d in enumerate(x.shape)]
+    shape = [1] * (ndim - 2) + [x.shape[-2], x.shape[-1]]
     return freqs_cis.view(*shape)
 
 
@@ -108,19 +108,31 @@ def apply_rotary_enc(
     repeat_freqs_k: bool = False,
 ):
     """Apply rotary positional encoding to query and key tensors using complex-valued frequency components."""
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2)) if xk.shape[-2] != 0 else None
+    # Reuse .float() only once for efficiency
+    xq_float = xq.float()
+    xq_reshaped = xq_float.reshape(*xq.shape[:-1], -1, 2)
+    xq_ = torch.view_as_complex(xq_reshaped)
+    # Optimize for xk: avoid float conversion if xk.shape[-2] == 0, skip reshape as well
+    if xk.shape[-2] != 0:
+        xk_float = xk.float()
+        xk_reshaped = xk_float.reshape(*xk.shape[:-1], -1, 2)
+        xk_ = torch.view_as_complex(xk_reshaped)
+    else:
+        xk_ = None
     freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
     xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
     if xk_ is None:
         # No keys to rotate, due to dropout
-        return xq_out.type_as(xq).to(xq.device), xk
+        # Use .to(xq.device, dtype=xq.dtype) to reduce two steps into one
+        return xq_out.to(xq.device, dtype=xq.dtype), xk
+    # Repeat freqs along seq_len dim to match k seq_len
     # Repeat freqs along seq_len dim to match k seq_len
     if repeat_freqs_k:
         r = xk_.shape[-2] // xq_.shape[-2]
-        freqs_cis = freqs_cis.repeat(*([1] * (freqs_cis.ndim - 2)), r, 1)
+        repeat_shape = [1] * (freqs_cis.ndim - 2) + [r, 1]
+        freqs_cis = freqs_cis.repeat(*repeat_shape)
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
-    return xq_out.type_as(xq).to(xq.device), xk_out.type_as(xk).to(xk.device)
+    return xq_out.to(xq.device, dtype=xq.dtype), xk_out.to(xk.device, dtype=xk.dtype)
 
 
 def window_partition(x, window_size):
