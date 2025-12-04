@@ -299,7 +299,8 @@ class MLPBlock(nn.Module):
         super().__init__()
         self.lin1 = nn.Linear(embedding_dim, mlp_dim)
         self.lin2 = nn.Linear(mlp_dim, embedding_dim)
-        self.act = act()
+        # Use act(inplace=True) only if the activation supports it; GELU does support inplace
+        self.act = act(inplace=True) if "inplace" in act.__init__.__code__.co_varnames else act()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -311,7 +312,11 @@ class MLPBlock(nn.Module):
         Returns:
             (torch.Tensor): Output tensor after MLP block.
         """
-        return self.lin2(self.act(self.lin1(x)))
+        # Fuse activations and linear where possible (ONNX, etc) - here, explicitly break into steps
+        x = self.lin1(x)
+        x = self.act(x)
+        x = self.lin2(x)
+        return x
 
 
 class MLP(nn.Module):
