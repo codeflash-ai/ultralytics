@@ -219,20 +219,39 @@ def get_rel_pos(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor
     if rel_pos.shape[0] != max_rel_dist:
         # Interpolate rel pos.
         rel_pos_resized = F.interpolate(
-            rel_pos.reshape(1, rel_pos.shape[0], -1).permute(0, 2, 1),
+            rel_pos.T.unsqueeze(0),  # [1, C, L]
             size=max_rel_dist,
             mode="linear",
-        )
-        rel_pos_resized = rel_pos_resized.reshape(-1, max_rel_dist).permute(1, 0)
+        )[0].T  # [C, max_rel_dist] -> [max_rel_dist, C]
     else:
         rel_pos_resized = rel_pos
 
-    # Scale the coords with short length if shapes for q and k are different.
-    q_coords = torch.arange(q_size)[:, None] * max(k_size / q_size, 1.0)
-    k_coords = torch.arange(k_size)[None, :] * max(q_size / k_size, 1.0)
-    relative_coords = (q_coords - k_coords) + (k_size - 1) * max(q_size / k_size, 1.0)
+    # Precompute scaling factors and coords.
+    # Use torch.linspace to directly get floating-point coordinates efficiently
+    if q_size != k_size:
+        q_scale = max(k_size / q_size, 1.0)
+        k_scale = max(q_size / k_size, 1.0)
+        q_coords = (
+            torch.linspace(0, q_size - 1, steps=q_size, dtype=rel_pos_resized.dtype, device=rel_pos_resized.device)[
+                :, None
+            ]
+            * q_scale
+        )
+        k_coords = (
+            torch.linspace(0, k_size - 1, steps=k_size, dtype=rel_pos_resized.dtype, device=rel_pos_resized.device)[
+                None, :
+            ]
+            * k_scale
+        )
+        relative_coords = (q_coords - k_coords) + (k_size - 1) * k_scale
+    else:
+        # If sizes are equal, use efficient meshgrid of integers
+        q_coords = torch.arange(q_size, dtype=rel_pos_resized.dtype, device=rel_pos_resized.device)[:, None]
+        k_coords = torch.arange(k_size, dtype=rel_pos_resized.dtype, device=rel_pos_resized.device)[None, :]
+        relative_coords = (q_coords - k_coords) + (k_size - 1)
 
-    return rel_pos_resized[relative_coords.long()]
+    # Use .to(torch.long) rather than .long() to avoid unnecessary copy if already correct dtype
+    return rel_pos_resized[relative_coords.to(torch.long)]
 
 
 def add_decomposed_rel_pos(
@@ -286,7 +305,8 @@ def add_decomposed_rel_pos(
     rel_h = torch.einsum("bhwc,hkc->bhwk", r_q, Rh)
     rel_w = torch.einsum("bhwc,wkc->bhwk", r_q, Rw)
 
-    attn = (attn.view(B, q_h, q_w, k_h, k_w) + rel_h[:, :, :, :, None] + rel_w[:, :, :, None, :]).view(
+    # Minimize copies by using .reshape rather than .view where shape is not contiguous
+    attn = (attn.reshape(B, q_h, q_w, k_h, k_w) + rel_h[:, :, :, :, None] + rel_w[:, :, :, None, :]).reshape(
         B, q_h * q_w, k_h * k_w
     )
 
