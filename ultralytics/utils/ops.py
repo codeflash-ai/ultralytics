@@ -422,10 +422,9 @@ def xyxy2xywh(x):
     """
     assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
     y = empty_like(x)  # faster than clone/copy
-    y[..., 0] = (x[..., 0] + x[..., 2]) / 2  # x center
-    y[..., 1] = (x[..., 1] + x[..., 3]) / 2  # y center
-    y[..., 2] = x[..., 2] - x[..., 0]  # width
-    y[..., 3] = x[..., 3] - x[..., 1]  # height
+    # Use advanced indexing for memory locality and speed
+    y[..., :2] = (x[..., :2] + x[..., 2:]) / 2
+    y[..., 2:] = x[..., 2:] - x[..., :2]
     return y
 
 
@@ -466,10 +465,14 @@ def xywhn2xyxy(x, w=640, h=640, padw=0, padh=0):
     """
     assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
     y = empty_like(x)  # faster than clone/copy
-    y[..., 0] = w * (x[..., 0] - x[..., 2] / 2) + padw  # top left x
-    y[..., 1] = h * (x[..., 1] - x[..., 3] / 2) + padh  # top left y
-    y[..., 2] = w * (x[..., 0] + x[..., 2] / 2) + padw  # bottom right x
-    y[..., 3] = h * (x[..., 1] + x[..., 3] / 2) + padh  # bottom right y
+    c_x = x[..., 0]
+    c_y = x[..., 1]
+    w_box = x[..., 2]
+    h_box = x[..., 3]
+    y[..., 0] = w * (c_x - w_box / 2) + padw
+    y[..., 1] = h * (c_y - h_box / 2) + padh
+    y[..., 2] = w * (c_x + w_box / 2) + padw
+    y[..., 3] = h * (c_y + h_box / 2) + padh
     return y
 
 
