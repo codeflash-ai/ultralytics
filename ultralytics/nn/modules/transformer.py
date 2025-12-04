@@ -264,7 +264,9 @@ class TransformerBlock(nn.Module):
         if c1 != c2:
             self.conv = Conv(c1, c2)
         self.linear = nn.Linear(c2, c2)  # learnable position embedding
-        self.tr = nn.Sequential(*(TransformerLayer(c2, num_heads) for _ in range(num_layers)))
+        # Pre-allocate transformer layers into a list and use nn.Sequential for efficient module creation
+        transformer_layers = [TransformerLayer(c2, num_heads) for _ in range(num_layers)]
+        self.tr = nn.Sequential(*transformer_layers)
         self.c2 = c2
 
     def forward(self, x):
@@ -281,7 +283,11 @@ class TransformerBlock(nn.Module):
             x = self.conv(x)
         b, _, w, h = x.shape
         p = x.flatten(2).permute(2, 0, 1)
-        return self.tr(p + self.linear(p)).permute(1, 2, 0).reshape(b, self.c2, w, h)
+        # Avoid creating an intermediate tensor for position embedding addition with in-place add if possible
+        p = p.add(self.linear(p))
+        out = self.tr(p)
+        # .permute followed by .reshape is faster than .view with strides mismatch, so keep as is
+        return out.permute(1, 2, 0).reshape(b, self.c2, w, h)
 
 
 class MLPBlock(nn.Module):
