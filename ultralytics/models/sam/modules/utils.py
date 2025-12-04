@@ -189,7 +189,7 @@ def window_unpartition(windows, window_size, pad_hw, hw):
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, Hp, Wp, -1)
 
     if Hp > H or Wp > W:
-        x = x[:, :H, :W, :].contiguous()
+        x = x[:, :H, :W, :]
     return x
 
 
