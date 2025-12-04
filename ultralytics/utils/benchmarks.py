@@ -517,9 +517,10 @@ class ProfileModels:
         Returns:
             (numpy.ndarray): Clipped data array with outliers removed.
         """
-        data = np.array(data)
+        data = np.asarray(data)
         for _ in range(max_iters):
-            mean, std = np.mean(data), np.std(data)
+            mean = data.mean()
+            std = data.std()
             clipped_data = data[(data > mean - sigma * std) & (data < mean + sigma * std)]
             if len(clipped_data) == len(data):
                 break
