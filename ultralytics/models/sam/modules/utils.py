@@ -97,7 +97,7 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     ndim = x.ndim
     assert 0 <= 1 < ndim
     assert freqs_cis.shape == (x.shape[-2], x.shape[-1])
-    shape = [d if i >= ndim - 2 else 1 for i, d in enumerate(x.shape)]
+    shape = [1] * (ndim - 2) + [x.shape[-2], x.shape[-1]]
     return freqs_cis.view(*shape)
 
 
