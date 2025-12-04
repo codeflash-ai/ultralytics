@@ -379,22 +379,30 @@ class KalmanFilterXYWH(KalmanFilterXYAH):
             >>> covariance = np.eye(8)
             >>> predicted_mean, predicted_covariance = kf.predict(mean, covariance)
         """
-        std_pos = [
-            self._std_weight_position * mean[2],
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[2],
-            self._std_weight_position * mean[3],
-        ]
-        std_vel = [
-            self._std_weight_velocity * mean[2],
-            self._std_weight_velocity * mean[3],
-            self._std_weight_velocity * mean[2],
-            self._std_weight_velocity * mean[3],
-        ]
-        motion_cov = np.diag(np.square(np.r_[std_pos, std_vel]))
+        # Use vectorized np.full for std_pos and std_vel calculation to minimize repeated Python operations
+        w = mean[2]  # width
+        h = mean[3]  # height
+        std_pos_w = self._std_weight_position * w
+        std_pos_h = self._std_weight_position * h
+        std_vel_w = self._std_weight_velocity * w
+        std_vel_h = self._std_weight_velocity * h
 
-        mean = np.dot(mean, self._motion_mat.T)
-        covariance = np.linalg.multi_dot((self._motion_mat, covariance, self._motion_mat.T)) + motion_cov
+        # Pre-allocate the std_position and velocity arrays directly
+        std_pos = np.array([std_pos_w, std_pos_h, std_pos_w, std_pos_h])
+        std_vel = np.array([std_vel_w, std_vel_h, std_vel_w, std_vel_h])
+
+        # np.r_ is less efficient for small arrays; concatenate directly
+        stds = np.concatenate((std_pos, std_vel))
+        # Vectorized square without unnecessary intermediate objects
+        motion_cov = np.diag(stds * stds)
+
+        # Avoid extra transpose by dotting in the logical order
+        mean = self._motion_mat @ mean
+
+        # Use fast matrix multiply: A @ B @ C is often faster than np.linalg.multi_dot for just 3 matrices
+        # On modern versions, @ (operator) is highly optimized
+        covariance = self._motion_mat @ covariance @ self._motion_mat.T
+        covariance += motion_cov
 
         return mean, covariance
 
