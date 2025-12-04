@@ -73,22 +73,34 @@ def get_1d_sine_pe(pos_inds, dim, temperature=10000):
 
 def init_t_xy(end_x: int, end_y: int):
     """Initialize 1D and 2D coordinate tensors for a grid of specified dimensions."""
-    t = torch.arange(end_x * end_y, dtype=torch.float32)
-    t_x = (t % end_x).float()
-    t_y = torch.div(t, end_x, rounding_mode="floor").float()
-    return t_x, t_y
+    t_y, t_x = torch.meshgrid(
+        torch.arange(end_y, dtype=torch.float32), torch.arange(end_x, dtype=torch.float32), indexing="ij"
+    )
+    return t_x.reshape(-1), t_y.reshape(-1)
 
 
 def compute_axial_cis(dim: int, end_x: int, end_y: int, theta: float = 10000.0):
     """Compute axial complex exponential positional encodings for 2D spatial positions in a grid."""
-    freqs_x = 1.0 / (theta ** (torch.arange(0, dim, 4)[: (dim // 4)].float() / dim))
-    freqs_y = 1.0 / (theta ** (torch.arange(0, dim, 4)[: (dim // 4)].float() / dim))
+    # Local variable for float type
+    _float = torch.float32
+
+    # Precompute arange once for both axes, avoids duplicate computation and respects slicing
+    _ar = torch.arange(0, dim, 4, dtype=_float)[: dim // 4] / dim
+    freqs_x = 1.0 / (theta**_ar)
+    freqs_y = freqs_x  # In original, freqs_x and freqs_y are built the same way
 
     t_x, t_y = init_t_xy(end_x, end_y)
-    freqs_x = torch.outer(t_x, freqs_x)
-    freqs_y = torch.outer(t_y, freqs_y)
-    freqs_cis_x = torch.polar(torch.ones_like(freqs_x), freqs_x)
-    freqs_cis_y = torch.polar(torch.ones_like(freqs_y), freqs_y)
+    # Use out argument for outer product to avoid tmp allocations as much as possible (torch doesn't support out for torch.outer, but this clarifies intention)
+    freqs_x_mat = torch.outer(t_x, freqs_x)
+    freqs_y_mat = torch.outer(t_y, freqs_y)
+
+    # Use torch.ones_like with dtype to optimize tensor property alignment and memory
+    ones_x = torch.ones_like(freqs_x_mat)
+    ones_y = torch.ones_like(freqs_y_mat)
+    # Precompute polar form
+    freqs_cis_x = torch.polar(ones_x, freqs_x_mat)
+    freqs_cis_y = torch.polar(ones_y, freqs_y_mat)
+    # Already matching semantics - concat along last dim
     return torch.cat([freqs_cis_x, freqs_cis_y], dim=-1)
 
 
