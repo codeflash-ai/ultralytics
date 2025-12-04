@@ -775,20 +775,22 @@ def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None, normalize=False
     """
     if ratio_pad is None:  # calculate from img0_shape
         gain = min(img1_shape[0] / img0_shape[0], img1_shape[1] / img0_shape[1])  # gain  = old / new
-        pad = (img1_shape[1] - img0_shape[1] * gain) / 2, (img1_shape[0] - img0_shape[0] * gain) / 2  # wh padding
+        pad_w = (img1_shape[1] - img0_shape[1] * gain) / 2
+        pad_h = (img1_shape[0] - img0_shape[0] * gain) / 2
+        pad = (pad_w, pad_h)
     else:
         gain = ratio_pad[0][0]
         pad = ratio_pad[1]
 
     if padding:
-        coords[..., 0] -= pad[0]  # x padding
-        coords[..., 1] -= pad[1]  # y padding
-    coords[..., 0] /= gain
-    coords[..., 1] /= gain
+        coords[..., 0].sub_(pad[0])
+        coords[..., 1].sub_(pad[1])
+    coords[..., 0].div_(gain)
+    coords[..., 1].div_(gain)
     coords = clip_coords(coords, img0_shape)
     if normalize:
-        coords[..., 0] /= img0_shape[1]  # width
-        coords[..., 1] /= img0_shape[0]  # height
+        coords[..., 0].div_(img0_shape[1])
+        coords[..., 1].div_(img0_shape[0])
     return coords
 
 
@@ -873,3 +875,21 @@ def empty_like(x):
     return (
         torch.empty_like(x, dtype=torch.float32) if isinstance(x, torch.Tensor) else np.empty_like(x, dtype=np.float32)
     )
+
+
+def clip_boxes(boxes, shape):
+    """
+    Clip bounding boxes to the image boundaries.
+
+    Args:
+        boxes (torch.Tensor): Bounding boxes, shape (..., 4).
+        shape (tuple): Image shape (height, width).
+
+    Returns:
+        torch.Tensor: Clipped bounding boxes.
+    """
+    boxes[..., 0].clamp_(0, shape[1])
+    boxes[..., 1].clamp_(0, shape[0])
+    boxes[..., 2].clamp_(0, shape[1])
+    boxes[..., 3].clamp_(0, shape[0])
+    return boxes
