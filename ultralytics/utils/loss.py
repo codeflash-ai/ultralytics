@@ -367,7 +367,9 @@ class v8SegmentationLoss(v8DetectionLoss):
             The function uses the equation pred_mask = torch.einsum('in,nhw->ihw', pred, proto) to produce the
             predicted masks from the prototype masks and predicted mask coefficients.
         """
-        pred_mask = torch.einsum("in,nhw->ihw", pred, proto)  # (n, 32) @ (32, 80, 80) -> (n, 80, 80)
+        # matmul for efficiency: (n,32) x (32,HW) -> (n,HW) -> (n,H,W)
+        proto_flat = proto.view(proto.shape[0], -1)
+        pred_mask = torch.matmul(pred, proto_flat).view(-1, proto.shape[1], proto.shape[2])
         loss = F.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction="none")
         return (crop_mask(loss, xyxy).mean(dim=(1, 2)) / area).sum()
 
