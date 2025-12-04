@@ -985,13 +985,14 @@ class SAM2Model(torch.nn.Module):
 
         device = pred_masks.device
         # "max_obj_inds": object index of the object with the highest score at each location
-        max_obj_inds = torch.argmax(pred_masks, dim=0, keepdim=True)
+        _, max_obj_inds = torch.max(pred_masks, dim=0, keepdim=True)
         # "batch_obj_inds": object index of each object slice (along dim 0) in `pred_masks`
         batch_obj_inds = torch.arange(batch_size, device=device)[:, None, None, None]
         keep = max_obj_inds == batch_obj_inds
         # suppress overlapping regions' scores below -10.0 so that the foreground regions
         # don't overlap (here sigmoid(-10.0)=4.5398e-05)
-        pred_masks = torch.where(keep, pred_masks, torch.clamp(pred_masks, max=-10.0))
+        min_mask = torch.clamp(pred_masks, max=-10.0)
+        pred_masks = torch.where(keep, pred_masks, min_mask)
         return pred_masks
 
     def set_binarize(self, binarize=False):
