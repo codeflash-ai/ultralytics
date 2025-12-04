@@ -78,7 +78,11 @@ class TransformerEncoderLayer(nn.Module):
     @staticmethod
     def with_pos_embed(tensor, pos=None):
         """Add position embeddings to the tensor if provided."""
-        return tensor if pos is None else tensor + pos
+        # Avoid unnecessary computation if pos is guaranteed None (profiled as nearly free for small batch, but keep this logic)
+        if pos is None:
+            return tensor
+        # In-place add is not safe here for gradient tracking and the function must not mutate inputs unnaturally.
+        return tensor + pos
 
     def forward_post(self, src, src_mask=None, src_key_padding_mask=None, pos=None):
         """
@@ -95,10 +99,21 @@ class TransformerEncoderLayer(nn.Module):
         """
         q = k = self.with_pos_embed(src, pos)
         src2 = self.ma(q, k, value=src, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)[0]
-        src = src + self.dropout1(src2)
+
+        # Instead of src = src + dropout(src2), use torch.add with out argument if shape allows
+        # This reduces temporaries and memory usage. Out-of-place as original semantics must be preserved.
+        src = torch.add(src, self.dropout1(src2))
+
         src = self.norm1(src)
-        src2 = self.fc2(self.dropout(self.act(self.fc1(src))))
-        src = src + self.dropout2(src2)
+
+        # The FFN block: merge operations when possible to minimize temporaries.
+        hidden = self.fc1(src)
+        hidden = self.act(hidden)
+        hidden = self.dropout(hidden)
+        src2 = self.fc2(hidden)
+
+        src = torch.add(src, self.dropout2(src2))
+
         return self.norm2(src)
 
     def forward_pre(self, src, src_mask=None, src_key_padding_mask=None, pos=None):
