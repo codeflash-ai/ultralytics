@@ -150,16 +150,12 @@ class KalmanFilterXYAH:
             >>> covariance = np.eye(8)
             >>> projected_mean, projected_covariance = kf.project(mean, covariance)
         """
-        std = [
-            self._std_weight_position * mean[3],
-            self._std_weight_position * mean[3],
-            1e-1,
-            self._std_weight_position * mean[3],
-        ]
-        innovation_cov = np.diag(np.square(std))
+        std_pos_h = self._std_weight_position * mean[3]
+        std = np.array([std_pos_h, std_pos_h, 1e-1, std_pos_h])
+        innovation_cov = np.diag(std * std)
 
         mean = np.dot(self._update_mat, mean)
-        covariance = np.linalg.multi_dot((self._update_mat, covariance, self._update_mat.T))
+        covariance = self._update_mat @ covariance @ self._update_mat.T
         return mean, covariance + innovation_cov
 
     def multi_predict(self, mean: np.ndarray, covariance: np.ndarray):
