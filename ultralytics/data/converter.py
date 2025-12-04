@@ -527,7 +527,8 @@ def min_index(arr1, arr2):
     Returns:
         (tuple): A tuple containing the indexes of the points with the shortest distance in arr1 and arr2 respectively.
     """
-    dis = ((arr1[:, None, :] - arr2[None, :, :]) ** 2).sum(-1)
+    diff = arr1[:, None, :] - arr2[None, :, :]
+    dis = np.einsum("ijk,ijk->ij", diff, diff, optimize=True)
     return np.unravel_index(np.argmin(dis, axis=None), dis.shape)
 
 
