@@ -398,9 +398,14 @@ class LayerNorm2d(nn.Module):
             (torch.Tensor): Normalized output tensor.
         """
         u = x.mean(1, keepdim=True)
-        s = (x - u).pow(2).mean(1, keepdim=True)
-        x = (x - u) / torch.sqrt(s + self.eps)
-        return self.weight[:, None, None] * x + self.bias[:, None, None]
+        x_centered = x - u
+        s = x_centered.square().mean(1, keepdim=True)
+        x = x_centered / torch.sqrt(s + self.eps)
+
+        # Use broadcasting-friendly expansion for weight/bias (avoids creating new tensors with None indexing)
+        w = self.weight.view(-1, 1, 1)
+        b = self.bias.view(-1, 1, 1)
+        return w * x + b
 
 
 class MSDeformAttn(nn.Module):
