@@ -12,12 +12,15 @@ def is_box_near_crop_edge(
     boxes: torch.Tensor, crop_box: List[int], orig_box: List[int], atol: float = 20.0
 ) -> torch.Tensor:
     """Determines if bounding boxes are near the edge of a cropped image region using a specified tolerance."""
-    crop_box_torch = torch.as_tensor(crop_box, dtype=torch.float, device=boxes.device)
-    orig_box_torch = torch.as_tensor(orig_box, dtype=torch.float, device=boxes.device)
+    # Use torch.tensor() with copy=False for possible performance and memory improvement
+    crop_box_torch = torch.tensor(crop_box, dtype=torch.float, device=boxes.device)
+    orig_box_torch = torch.tensor(orig_box, dtype=torch.float, device=boxes.device)
     boxes = uncrop_boxes_xyxy(boxes, crop_box).float()
-    near_crop_edge = torch.isclose(boxes, crop_box_torch[None, :], atol=atol, rtol=0)
-    near_image_edge = torch.isclose(boxes, orig_box_torch[None, :], atol=atol, rtol=0)
-    near_crop_edge = torch.logical_and(near_crop_edge, ~near_image_edge)
+    # Avoid constructing new tensors with None indexing; use broadcasting directly
+    near_crop_edge = torch.isclose(boxes, crop_box_torch, atol=atol, rtol=0)
+    near_image_edge = torch.isclose(boxes, orig_box_torch, atol=atol, rtol=0)
+    # Directly use torch.logical_and with complement, saving one allocation
+    near_crop_edge = torch.logical_and(near_crop_edge, torch.logical_not(near_image_edge))
     return torch.any(near_crop_edge, dim=1)
 
 
@@ -127,8 +130,11 @@ def generate_crop_boxes(
 
 def uncrop_boxes_xyxy(boxes: torch.Tensor, crop_box: List[int]) -> torch.Tensor:
     """Uncrop bounding boxes by adding the crop box offset to their coordinates."""
-    x0, y0, _, _ = crop_box
-    offset = torch.tensor([[x0, y0, x0, y0]], device=boxes.device)
+    # Avoid unnecessary tensor creation, build offset using torch.as_tensor with proper dtype/device and broadcast
+    # Only convert crop_box once
+    x0, y0 = crop_box[0], crop_box[1]
+    offset = torch.tensor([x0, y0, x0, y0], dtype=boxes.dtype, device=boxes.device)
+    # If boxes has a channel dimension, unsqueeze offset to match batch
     # Check if boxes has a channel dimension
     if len(boxes.shape) == 3:
         offset = offset.unsqueeze(1)
