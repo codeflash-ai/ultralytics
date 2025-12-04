@@ -75,7 +75,8 @@ def init_t_xy(end_x: int, end_y: int):
     """Initialize 1D and 2D coordinate tensors for a grid of specified dimensions."""
     t = torch.arange(end_x * end_y, dtype=torch.float32)
     t_x = (t % end_x).float()
-    t_y = torch.div(t, end_x, rounding_mode="floor").float()
+    t_y = torch.empty_like(t)
+    torch.div(t, end_x, rounding_mode="floor", out=t_y)
     return t_x, t_y
 
 
