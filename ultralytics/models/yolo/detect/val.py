@@ -79,19 +79,21 @@ class DetectionValidator(BaseValidator):
         Returns:
             (dict): Preprocessed batch.
         """
-        batch["img"] = batch["img"].to(self.device, non_blocking=True)
-        batch["img"] = (batch["img"].half() if self.args.half else batch["img"].float()) / 255
+        # Efficiently cast and move image tensor in one step
+        dtype = torch.half if self.args.half else torch.float
+        batch["img"] = batch["img"].to(self.device, dtype=dtype, non_blocking=True).div_(255)
         for k in ["batch_idx", "cls", "bboxes"]:
             batch[k] = batch[k].to(self.device)
 
         if self.args.save_hybrid and self.args.task == "detect":
             height, width = batch["img"].shape[2:]
-            nb = len(batch["img"])
-            bboxes = batch["bboxes"] * torch.tensor((width, height, width, height), device=self.device)
-            self.lb = [
-                torch.cat([batch["cls"][batch["batch_idx"] == i], bboxes[batch["batch_idx"] == i]], dim=-1)
-                for i in range(nb)
-            ]
+            nb = batch["img"].shape[0]
+            whwh = torch.tensor((width, height, width, height), device=self.device)
+            bboxes = batch["bboxes"] * whwh
+            batch_idx = batch["batch_idx"]
+            cls = batch["cls"]
+            # Use advanced indexing for more efficient mask selection
+            self.lb = [torch.cat([cls[mask], bboxes[mask]], dim=-1) for mask in (batch_idx == i for i in range(nb))]
 
         return batch
 
