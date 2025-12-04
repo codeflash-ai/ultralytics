@@ -37,25 +37,47 @@ def select_closest_cond_frames(frame_idx, cond_frame_outputs, max_cond_frame_num
         assert max_cond_frame_num >= 2, "we should allow using 2+ conditioning frames"
         selected_outputs = {}
 
-        # The closest conditioning frame before `frame_idx` (if any)
-        idx_before = max((t for t in cond_frame_outputs if t < frame_idx), default=None)
-        if idx_before is not None:
-            selected_outputs[idx_before] = cond_frame_outputs[idx_before]
-
-        # The closest conditioning frame after `frame_idx` (if any)
-        idx_after = min((t for t in cond_frame_outputs if t >= frame_idx), default=None)
-        if idx_after is not None:
-            selected_outputs[idx_after] = cond_frame_outputs[idx_after]
+        # Convert keys for efficient pass
+        keys = list(cond_frame_outputs)
+        n = len(keys)
+        before_idx = None
+        after_idx = None
+        # One pass: Find closest before and after
+        min_before = -float("inf")
+        min_after = float("inf")
+        for t in keys:
+            if t < frame_idx:
+                if t > min_before:
+                    min_before = t
+            elif t >= frame_idx:
+                if t < min_after:
+                    min_after = t
+        if min_before != -float("inf"):
+            before_idx = min_before
+            selected_outputs[before_idx] = cond_frame_outputs[before_idx]
+        if min_after != float("inf"):
+            after_idx = min_after
+            # Don't select twice if before==after and both fall on current
+            if before_idx != after_idx:
+                selected_outputs[after_idx] = cond_frame_outputs[after_idx]
+        # Add other temporally closest frames until max_cond_frame_num
 
         # Add other temporally closest conditioning frames until reaching a total
         # of `max_cond_frame_num` conditioning frames.
         num_remain = max_cond_frame_num - len(selected_outputs)
-        inds_remain = sorted(
-            (t for t in cond_frame_outputs if t not in selected_outputs),
-            key=lambda x: abs(x - frame_idx),
-        )[:num_remain]
-        selected_outputs.update((t, cond_frame_outputs[t]) for t in inds_remain)
-        unselected_outputs = {t: v for t, v in cond_frame_outputs.items() if t not in selected_outputs}
+        if num_remain > 0:
+            # Collect keys left out of selected_outputs (guaranteed at most n-2)
+            candidates = []
+            for t in keys:
+                if t not in selected_outputs:
+                    candidates.append((abs(t - frame_idx), t))
+            if candidates:
+                # Partial sort for small num_remain for efficiency
+                candidates.sort()
+                for _, t in candidates[:num_remain]:
+                    selected_outputs[t] = cond_frame_outputs[t]
+        # Unselected calculation: building dict comprehension over keys
+        unselected_outputs = {t: cond_frame_outputs[t] for t in keys if t not in selected_outputs}
 
     return selected_outputs, unselected_outputs
 
