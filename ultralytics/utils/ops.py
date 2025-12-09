@@ -441,11 +441,14 @@ def xywh2xyxy(x):
         y (np.ndarray | torch.Tensor): The bounding box coordinates in (x1, y1, x2, y2) format.
     """
     assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
+    # Preallocate output array of correct type and shape
+    from ultralytics.utils.ops import empty_like
+
     y = empty_like(x)  # faster than clone/copy
     xy = x[..., :2]  # centers
-    wh = x[..., 2:] / 2  # half width-height
-    y[..., :2] = xy - wh  # top left xy
-    y[..., 2:] = xy + wh  # bottom right xy
+    wh2 = x[..., 2:] * 0.5
+    y[..., :2] = xy - wh2
+    y[..., 2:] = xy + wh2
     return y
 
 
