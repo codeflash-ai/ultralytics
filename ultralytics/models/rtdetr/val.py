@@ -162,7 +162,16 @@ class RTDETRValidator(DetectionValidator):
         Returns:
             (torch.Tensor): Predictions scaled to original image dimensions.
         """
+        # Use in-place .mul_() instead of *= to avoid extra computation, and avoid unnecessary clone
+        # by cloning only if pred is needed elsewhere (behavior preserved as original).
+        # Compute scale factors just once
+        sx = pbatch["ori_shape"][1] / self.args.imgsz
+        sy = pbatch["ori_shape"][0] / self.args.imgsz
+
         predn = pred.clone()
-        predn[..., [0, 2]] *= pbatch["ori_shape"][1] / self.args.imgsz  # native-space pred
-        predn[..., [1, 3]] *= pbatch["ori_shape"][0] / self.args.imgsz  # native-space pred
+        # Use torch indexing for slicing instead of list indexing for better performance
+        predn[..., 0].mul_(sx)
+        predn[..., 2].mul_(sx)
+        predn[..., 1].mul_(sy)
+        predn[..., 3].mul_(sy)
         return predn.float()
