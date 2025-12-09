@@ -282,12 +282,17 @@ def add_decomposed_rel_pos(
     Rw = get_rel_pos(q_w, k_w, rel_pos_w)
 
     B, _, dim = q.shape
-    r_q = q.reshape(B, q_h, q_w, dim)
+    # One call to reshape for efficiency
+    r_q = q.view(B, q_h, q_w, dim)
+
+    # Compute rel_h and rel_w directly for efficiency, minimizing intermediate allocations.
     rel_h = torch.einsum("bhwc,hkc->bhwk", r_q, Rh)
     rel_w = torch.einsum("bhwc,wkc->bhwk", r_q, Rw)
 
-    attn = (attn.view(B, q_h, q_w, k_h, k_w) + rel_h[:, :, :, :, None] + rel_w[:, :, :, None, :]).view(
-        B, q_h * q_w, k_h * k_w
-    )
+    # More efficient attention update and flatten
+    attn = attn.view(B, q_h, q_w, k_h, k_w)
+    attn += rel_h[:, :, :, :, None]
+    attn += rel_w[:, :, :, None, :]
+    attn = attn.reshape(B, q_h * q_w, k_h * k_w)
 
     return attn
