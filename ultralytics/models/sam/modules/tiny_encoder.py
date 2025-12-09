@@ -581,6 +581,12 @@ class TinyViTBlock(nn.Module):
         pad = local_conv_size // 2
         self.local_conv = Conv2d_BN(dim, dim, ks=local_conv_size, stride=1, pad=pad, groups=dim)
 
+        # Precompute and cache the string for extra_repr since the attributes are all immutable after __init__
+        self._extra_repr_str = (
+            f"dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, "
+            f"window_size={self.window_size}, mlp_ratio={self.mlp_ratio}"
+        )
+
     def forward(self, x):
         """Applies self-attention, local convolution, and MLP operations to the input tensor."""
         h, w = self.input_resolution
@@ -638,10 +644,7 @@ class TinyViTBlock(nn.Module):
             >>> print(block.extra_repr())
             dim=192, input_resolution=(14, 14), num_heads=3, window_size=7, mlp_ratio=4.0
         """
-        return (
-            f"dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, "
-            f"window_size={self.window_size}, mlp_ratio={self.mlp_ratio}"
-        )
+        return self._extra_repr_str
 
 
 class BasicLayer(nn.Module):
