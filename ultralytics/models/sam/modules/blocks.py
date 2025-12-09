@@ -87,27 +87,33 @@ class MaskDownSampler(nn.Module):
         super().__init__()
         num_layers = int(math.log2(total_stride) // math.log2(stride))
         assert stride**num_layers == total_stride
-        self.encoder = nn.Sequential()
+
+        # Preallocate layers list for efficiency, build encoder in one go
+        layers = []
         mask_in_chans, mask_out_chans = 1, 1
         for _ in range(num_layers):
             mask_out_chans = mask_in_chans * (stride**2)
-            self.encoder.append(
-                nn.Conv2d(
-                    mask_in_chans,
-                    mask_out_chans,
-                    kernel_size=kernel_size,
-                    stride=stride,
-                    padding=padding,
+            layers.extend(
+                (
+                    nn.Conv2d(
+                        mask_in_chans,
+                        mask_out_chans,
+                        kernel_size=kernel_size,
+                        stride=stride,
+                        padding=padding,
+                    ),
+                    LayerNorm2d(mask_out_chans),
+                    activation(),
                 )
             )
-            self.encoder.append(LayerNorm2d(mask_out_chans))
-            self.encoder.append(activation())
             mask_in_chans = mask_out_chans
 
-        self.encoder.append(nn.Conv2d(mask_out_chans, embed_dim, kernel_size=1))
+        layers.append(nn.Conv2d(mask_out_chans, embed_dim, kernel_size=1))
+        self.encoder = nn.Sequential(*layers)
 
     def forward(self, x):
         """Downsamples and encodes input mask to embed_dim channels using convolutional layers and LayerNorm2d."""
+        # Avoid unnecessary function-hop: input goes directly to the encoder (already optimal for PyTorch Sequential)
         return self.encoder(x)
 
 
