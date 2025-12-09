@@ -333,8 +333,8 @@ class GMC:
 
         # Handle first frame
         if not self.initializedFirstFrame or self.prevKeyPoints is None:
-            self.prevFrame = frame.copy()
-            self.prevKeyPoints = copy.copy(keypoints)
+            self.prevFrame = frame
+            self.prevKeyPoints = keypoints
             self.initializedFirstFrame = True
             return H
 
@@ -342,29 +342,25 @@ class GMC:
         matchedKeypoints, status, _ = cv2.calcOpticalFlowPyrLK(self.prevFrame, frame, self.prevKeyPoints, None)
 
         # Leave good correspondences only
-        prevPoints = []
-        currPoints = []
+        good_indices = np.where(status.ravel() == 1)[0]
+        if good_indices.size > 0:
+            prevPoints = self.prevKeyPoints[good_indices]
+            currPoints = matchedKeypoints[good_indices]
 
-        for i in range(len(status)):
-            if status[i]:
-                prevPoints.append(self.prevKeyPoints[i])
-                currPoints.append(matchedKeypoints[i])
+            # Find rigid matrix
+            if (prevPoints.shape[0] > 4) and (prevPoints.shape[0] == currPoints.shape[0]):
+                H, _ = cv2.estimateAffinePartial2D(prevPoints, currPoints, cv2.RANSAC)
 
-        prevPoints = np.array(prevPoints)
-        currPoints = np.array(currPoints)
-
-        # Find rigid matrix
-        if (prevPoints.shape[0] > 4) and (prevPoints.shape[0] == currPoints.shape[0]):
-            H, _ = cv2.estimateAffinePartial2D(prevPoints, currPoints, cv2.RANSAC)
-
-            if self.downscale > 1.0:
-                H[0, 2] *= self.downscale
-                H[1, 2] *= self.downscale
+                if self.downscale > 1.0:
+                    H[0, 2] *= self.downscale
+                    H[1, 2] *= self.downscale
+            else:
+                LOGGER.warning("WARNING: not enough matching points")
         else:
             LOGGER.warning("WARNING: not enough matching points")
 
-        self.prevFrame = frame.copy()
-        self.prevKeyPoints = copy.copy(keypoints)
+        self.prevFrame = frame
+        self.prevKeyPoints = keypoints
 
         return H
 
