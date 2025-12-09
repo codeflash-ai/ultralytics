@@ -85,6 +85,7 @@ from ultralytics.utils.torch_utils import (
     scale_img,
     time_sync,
 )
+from ultralytics.models.utils.loss import RTDETRDetectionLoss
 
 try:
     import thop
@@ -591,9 +592,9 @@ class RTDETRDetectionModel(DetectionModel):
 
     def init_criterion(self):
         """Initialize the loss criterion for the RTDETRDetectionModel."""
-        from ultralytics.models.utils.loss import RTDETRDetectionLoss
-
-        return RTDETRDetectionLoss(nc=self.nc, use_vfl=True)
+        # Optimize import: move to module-level instead of inside function
+        # This avoids repeating the import each time init_criterion is called
+        return _rtdetr_loss_instance(self.nc)
 
     def loss(self, batch, preds=None):
         """
@@ -1343,3 +1344,8 @@ def guess_model_task(model):
         "Explicitly define task for your model, i.e. 'task=detect', 'segment', 'classify','pose' or 'obb'."
     )
     return "detect"  # assume detect
+
+
+def _rtdetr_loss_instance(nc):
+    # Behavior preserved: always use use_vfl=True
+    return RTDETRDetectionLoss(nc=nc, use_vfl=True)
