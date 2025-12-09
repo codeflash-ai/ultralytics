@@ -451,14 +451,25 @@ class SAM2MaskDecoder(nn.Module):
 
         return masks, iou_pred, mask_tokens_out, object_score_logits
 
+    @torch.jit.ignore
     def _get_stability_scores(self, mask_logits):
         """Compute mask stability scores based on IoU between upper and lower thresholds."""
         mask_logits = mask_logits.flatten(-2)
         stability_delta = self.dynamic_multimask_stability_delta
-        area_i = torch.sum(mask_logits > stability_delta, dim=-1).float()
-        area_u = torch.sum(mask_logits > -stability_delta, dim=-1).float()
-        return torch.where(area_u > 0, area_i / area_u, 1.0)
 
+        # The comparison returns a boolean mask (uint8 or bool tensor). For speedup, leverage bitwise ops.
+        gt_pos = mask_logits > stability_delta
+        gt_neg = mask_logits > -stability_delta
+
+        # Use sum with dtype float directly for best performance (saves converting after summing).
+        area_i = torch.sum(gt_pos, dim=-1, dtype=torch.float32)
+        area_u = torch.sum(gt_neg, dim=-1, dtype=torch.float32)
+
+        # To avoid creating two masks for area_u > 0, we can use torch.reciprocal (with clamp) for the denominator.
+        # But since 1.0 is the default for area_u == 0, torch.where is already fast and branches once.
+        return torch.where(area_u > 0, area_i / area_u, mask_logits.new_tensor(1.0))
+
+    @torch.jit.ignore
     def _dynamic_multimask_via_stability(self, all_mask_logits, all_iou_scores):
         """
         Dynamically select the most stable mask output based on stability scores and IoU predictions.
@@ -488,12 +499,18 @@ class SAM2MaskDecoder(nn.Module):
         # The best mask from multimask output tokens (1~3)
         multimask_logits = all_mask_logits[:, 1:, :, :]
         multimask_iou_scores = all_iou_scores[:, 1:]
-        best_scores_inds = torch.argmax(multimask_iou_scores, dim=-1)
-        batch_inds = torch.arange(multimask_iou_scores.size(0), device=all_iou_scores.device)
-        best_multimask_logits = multimask_logits[batch_inds, best_scores_inds]
-        best_multimask_logits = best_multimask_logits.unsqueeze(1)
-        best_multimask_iou_scores = multimask_iou_scores[batch_inds, best_scores_inds]
-        best_multimask_iou_scores = best_multimask_iou_scores.unsqueeze(1)
+
+        # Get the indices in batch for max IoU score (one per batch)
+        best_scores_inds = torch.argmax(multimask_iou_scores, dim=-1, keepdim=True)  # [B, 1]
+        batch_size = multimask_iou_scores.size(0)
+
+        # optimize best_multimask_logits: [B, C, H, W], use gather instead of constructing advanced indexes
+        best_multimask_logits = torch.gather(
+            multimask_logits,
+            1,
+            best_scores_inds[:, :, None, None].expand(-1, -1, multimask_logits.shape[2], multimask_logits.shape[3]),
+        )  # [B, 1, H, W]
+        best_multimask_iou_scores = torch.gather(multimask_iou_scores, 1, best_scores_inds)  # [B, 1]
 
         # The mask from singlemask output token 0 and its stability score
         singlemask_logits = all_mask_logits[:, 0:1, :, :]
@@ -503,12 +520,12 @@ class SAM2MaskDecoder(nn.Module):
 
         # Dynamically fall back to best multimask output upon low stability scores.
         mask_logits_out = torch.where(
-            is_stable[..., None, None].expand_as(singlemask_logits),
+            is_stable[..., None, None],
             singlemask_logits,
             best_multimask_logits,
         )
         iou_scores_out = torch.where(
-            is_stable.expand_as(singlemask_iou_scores),
+            is_stable,
             singlemask_iou_scores,
             best_multimask_iou_scores,
         )
