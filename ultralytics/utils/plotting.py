@@ -91,29 +91,32 @@ class Colors:
 
     def __init__(self):
         """Initialize colors as hex = matplotlib.colors.TABLEAU_COLORS.values()."""
-        hexs = (
-            "042AFF",
-            "0BDBEB",
-            "F3F3F3",
-            "00DFB7",
-            "111F68",
-            "FF6FDD",
-            "FF444F",
-            "CCED00",
-            "00F344",
-            "BD00FF",
-            "00B4FF",
-            "DD00BA",
-            "00FFFF",
-            "26C000",
-            "01FFB3",
-            "7D24FF",
-            "7B0068",
-            "FF1B6C",
-            "FC6D2F",
-            "A2FF0B",
-        )
-        self.palette = [self.hex2rgb(f"#{c}") for c in hexs]
+        # Use fast literal tuple and precomputed palette and pose_palette
+        # Avoid repeated function calls and string operations for speed
+
+        # Precompute palette to avoid repeated hex2rgb conversion at runtime
+        self.palette = [
+            (4, 42, 255),  # "042AFF"
+            (11, 219, 235),  # "0BDBEB"
+            (243, 243, 243),  # "F3F3F3"
+            (0, 223, 183),  # "00DFB7"
+            (17, 31, 104),  # "111F68"
+            (255, 111, 221),  # "FF6FDD"
+            (255, 68, 79),  # "FF444F"
+            (204, 237, 0),  # "CCED00"
+            (0, 243, 68),  # "00F344"
+            (189, 0, 255),  # "BD00FF"
+            (0, 180, 255),  # "00B4FF"
+            (221, 0, 186),  # "DD00BA"
+            (0, 255, 255),  # "00FFFF"
+            (38, 192, 0),  # "26C000"
+            (1, 255, 179),  # "01FFB3"
+            (125, 36, 255),  # "7D24FF"
+            (123, 0, 104),  # "7B0068"
+            (255, 27, 108),  # "FF1B6C"
+            (252, 109, 47),  # "FC6D2F"
+            (162, 255, 11),  # "A2FF0B"
+        ]
         self.n = len(self.palette)
         self.pose_palette = np.array(
             [
@@ -149,7 +152,12 @@ class Colors:
     @staticmethod
     def hex2rgb(h):
         """Convert hex color codes to RGB values (i.e. default PIL order)."""
-        return tuple(int(h[1 + i : 1 + i + 2], 16) for i in (0, 2, 4))
+        # Keep for compatibility if called, but no longer used in constructor for hexs
+        return (
+            int(h[1:3], 16),
+            int(h[3:5], 16),
+            int(h[5:7], 16),
+        )
 
 
 colors = Colors()  # create instance for 'from utils.plots import colors'
