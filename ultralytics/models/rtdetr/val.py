@@ -147,8 +147,11 @@ class RTDETRValidator(DetectionValidator):
         ratio_pad = batch["ratio_pad"][si]
         if len(cls):
             bbox = ops.xywh2xyxy(bbox)  # target boxes
-            bbox[..., [0, 2]] *= ori_shape[1]  # native-space pred
-            bbox[..., [1, 3]] *= ori_shape[0]  # native-space pred
+            # In-place multiplication improves speed and memory efficiency
+            bbox[..., 0] *= ori_shape[1]  # x1
+            bbox[..., 2] *= ori_shape[1]  # x2
+            bbox[..., 1] *= ori_shape[0]  # y1
+            bbox[..., 3] *= ori_shape[0]  # y2
         return {"cls": cls, "bbox": bbox, "ori_shape": ori_shape, "imgsz": imgsz, "ratio_pad": ratio_pad}
 
     def _prepare_pred(self, pred, pbatch):
