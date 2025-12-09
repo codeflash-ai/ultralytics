@@ -115,16 +115,25 @@ class RTDETRValidator(DetectionValidator):
         bs, _, nd = preds[0].shape
         bboxes, scores = preds[0].split((4, nd - 4), dim=-1)
         bboxes *= self.args.imgsz
-        outputs = [torch.zeros((0, 6), device=bboxes.device)] * bs
-        for i, bbox in enumerate(bboxes):  # (300, 4)
-            bbox = ops.xywh2xyxy(bbox)
-            score, cls = scores[i].max(-1)  # (300, )
+
+        # Preallocate outputs as per batch size
+        outputs = []
+        # Vectorized conversion of bounding box format for the whole batch
+        bboxes = ops.xywh2xyxy(bboxes)
+        # Compute scores and classes in batch
+        score_vals, cls_vals = scores.max(-1)
+
+        for i in range(bs):
+            bbox = bboxes[i]
+            score = score_vals[i]
+            cls = cls_vals[i]
+            # torch.cat and sorting are kept per-image due to variable predictions per image
             # Do not need threshold for evaluation as only got 300 boxes here
             # idx = score > self.args.conf
             pred = torch.cat([bbox, score[..., None], cls[..., None]], dim=-1)  # filter
             # Sort by confidence to correctly get internal metrics
             pred = pred[score.argsort(descending=True)]
-            outputs[i] = pred  # [idx]
+            outputs.append(pred)
 
         return outputs
 
