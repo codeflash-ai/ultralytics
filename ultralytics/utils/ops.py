@@ -421,12 +421,19 @@ def xyxy2xywh(x):
         y (np.ndarray | torch.Tensor): The bounding box coordinates in (x, y, width, height) format.
     """
     assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
-    y = empty_like(x)  # faster than clone/copy
-    y[..., 0] = (x[..., 0] + x[..., 2]) / 2  # x center
-    y[..., 1] = (x[..., 1] + x[..., 3]) / 2  # y center
-    y[..., 2] = x[..., 2] - x[..., 0]  # width
-    y[..., 3] = x[..., 3] - x[..., 1]  # height
-    return y
+    # Vectorized assignment for better performance and memory locality
+    if hasattr(x, "is_cuda") or "torch" in str(type(x)):
+        # torch.Tensor branch
+        y = empty_like(x)
+        y[..., 0:2] = (x[..., 0:2] + x[..., 2:4]) / 2  # x center, y center at once
+        y[..., 2:4] = x[..., 2:4] - x[..., 0:2]  # width and height at once
+        return y
+    else:
+        # np.ndarray branch
+        y = empty_like(x)
+        y[..., 0:2] = (x[..., 0:2] + x[..., 2:4]) / 2
+        y[..., 2:4] = x[..., 2:4] - x[..., 0:2]
+        return y
 
 
 def xywh2xyxy(x):
@@ -441,12 +448,23 @@ def xywh2xyxy(x):
         y (np.ndarray | torch.Tensor): The bounding box coordinates in (x1, y1, x2, y2) format.
     """
     assert x.shape[-1] == 4, f"input shape last dimension expected 4 but input shape is {x.shape}"
-    y = empty_like(x)  # faster than clone/copy
-    xy = x[..., :2]  # centers
-    wh = x[..., 2:] / 2  # half width-height
-    y[..., :2] = xy - wh  # top left xy
-    y[..., 2:] = xy + wh  # bottom right xy
-    return y
+    # Vectorized assignment per 2-dim for performance
+    if hasattr(x, "is_cuda") or "torch" in str(type(x)):
+        # torch.Tensor branch
+        y = empty_like(x)
+        xy = x[..., :2]
+        wh = x[..., 2:4] / 2
+        y[..., :2] = xy - wh  # top left xy
+        y[..., 2:4] = xy + wh  # bottom right xy
+        return y
+    else:
+        # np.ndarray branch
+        y = empty_like(x)
+        xy = x[..., :2]
+        wh = x[..., 2:4] / 2
+        y[..., :2] = xy - wh
+        y[..., 2:4] = xy + wh
+        return y
 
 
 def xywhn2xyxy(x, w=640, h=640, padw=0, padh=0):

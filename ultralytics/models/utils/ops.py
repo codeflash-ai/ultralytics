@@ -194,19 +194,17 @@ def get_cdn_group(
 
     if cls_noise_ratio > 0:
         # Half of bbox prob
-        mask = torch.rand(dn_cls.shape) < (cls_noise_ratio * 0.5)
-        idx = torch.nonzero(mask).squeeze(-1)
-        # Randomly put a new one here
-        new_label = torch.randint_like(idx, 0, num_classes, dtype=dn_cls.dtype, device=dn_cls.device)
+        mask = torch.rand(dn_cls.shape, device=dn_cls.device) < (cls_noise_ratio * 0.5)
+        idx = mask.nonzero(as_tuple=False).squeeze(-1)
+        new_label = torch.randint(0, num_classes, (idx.shape[0],), dtype=dn_cls.dtype, device=dn_cls.device)
         dn_cls[idx] = new_label
 
     if box_noise_scale > 0:
         known_bbox = xywh2xyxy(dn_bbox)
 
         diff = (dn_bbox[..., 2:] * 0.5).repeat(1, 2) * box_noise_scale  # 2*num_group*bs*num, 4
-
-        rand_sign = torch.randint_like(dn_bbox, 0, 2) * 2.0 - 1.0
-        rand_part = torch.rand_like(dn_bbox)
+        rand_sign = torch.randint(0, 2, dn_bbox.shape, dtype=dn_bbox.dtype, device=dn_bbox.device) * 2.0 - 1.0
+        rand_part = torch.rand(dn_bbox.shape, device=dn_bbox.device, dtype=dn_bbox.dtype)
         rand_part[neg_idx] += 1.0
         rand_part *= rand_sign
         known_bbox += rand_part * diff
@@ -220,26 +218,51 @@ def get_cdn_group(
     padding_cls = torch.zeros(bs, num_dn, dn_cls_embed.shape[-1], device=gt_cls.device)
     padding_bbox = torch.zeros(bs, num_dn, 4, device=gt_bbox.device)
 
-    map_indices = torch.cat([torch.tensor(range(num), dtype=torch.long) for num in gt_groups])
-    pos_idx = torch.stack([map_indices + max_nums * i for i in range(num_group)], dim=0)
+    # Efficient index preparation using torch.repeat_interleave (replaces slow Python list+cat)
+    map_indices = torch.repeat_interleave(
+        torch.arange(len(gt_groups), dtype=torch.long, device=gt_cls.device),
+        torch.tensor(gt_groups, device=gt_cls.device),
+    )
+    grouped = torch.tensor(gt_groups, device=gt_cls.device)
+    batch_offsets = torch.cumsum(grouped, dim=0) - grouped
+    elem_indices = torch.cat([torch.arange(num, dtype=torch.long, device=gt_cls.device) for num in gt_groups])
+    # map_indices contains the batch indices corresponding to each element in elem_indices
 
-    map_indices = torch.cat([map_indices + max_nums * i for i in range(2 * num_group)])
-    padding_cls[(dn_b_idx, map_indices)] = dn_cls_embed
-    padding_bbox[(dn_b_idx, map_indices)] = dn_bbox
+    # Now compute position indices by broadcasting
+    pos_idx_base = elem_indices.unsqueeze(0) + max_nums * torch.arange(num_group, device=gt_cls.device).unsqueeze(
+        1
+    )  # [num_group, total_num]
+    pos_idx = pos_idx_base
+
+    # map_indices for full indexing (repeat for groups)
+    map_indices_full = elem_indices.unsqueeze(0) + max_nums * torch.arange(
+        2 * num_group, device=gt_cls.device
+    ).unsqueeze(1)
+    map_indices_full = map_indices_full.reshape(-1)
+    dn_b_idx_full = torch.repeat_interleave(map_indices, 2 * num_group)
+    # Use dn_b_idx from repeat as in original code, preserve assignment indexing--note shape and content matches
+    padding_cls[(dn_b_idx, map_indices_full)] = dn_cls_embed
+    padding_bbox[(dn_b_idx, map_indices_full)] = dn_bbox
 
     tgt_size = num_dn + num_queries
-    attn_mask = torch.zeros([tgt_size, tgt_size], dtype=torch.bool)
+    attn_mask = torch.zeros([tgt_size, tgt_size], dtype=torch.bool, device=gt_cls.device)
     # Match query cannot see the reconstruct
     attn_mask[num_dn:, :num_dn] = True
     # Reconstruct cannot see each other
     for i in range(num_group):
+        start = max_nums * 2 * i
+        end = max_nums * 2 * (i + 1)
+        left = max_nums * 2 * i
+        right = max_nums * 2 * (i + 1)
+        # Attn mask slice assignment in one go, reuse slicing, avoid redundant branches
         if i == 0:
-            attn_mask[max_nums * 2 * i : max_nums * 2 * (i + 1), max_nums * 2 * (i + 1) : num_dn] = True
+            attn_mask[start:end, right:num_dn] = True
         if i == num_group - 1:
-            attn_mask[max_nums * 2 * i : max_nums * 2 * (i + 1), : max_nums * i * 2] = True
+            attn_mask[start:end, :left] = True
         else:
-            attn_mask[max_nums * 2 * i : max_nums * 2 * (i + 1), max_nums * 2 * (i + 1) : num_dn] = True
-            attn_mask[max_nums * 2 * i : max_nums * 2 * (i + 1), : max_nums * 2 * i] = True
+            attn_mask[start:end, right:num_dn] = True
+            attn_mask[start:end, :left] = True
+
     dn_meta = {
         "dn_pos_idx": [p.reshape(-1) for p in pos_idx.cpu().split(list(gt_groups), dim=1)],
         "dn_num_group": num_group,
