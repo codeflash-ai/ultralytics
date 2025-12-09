@@ -460,10 +460,26 @@ class ConfusionMatrix:
 
 def smooth(y, f=0.05):
     """Box filter of fraction f."""
-    nf = round(len(y) * f * 2) // 2 + 1  # number of filter elements (must be odd)
-    p = np.ones(nf // 2)  # ones padding
-    yp = np.concatenate((p * y[0], y, p * y[-1]), 0)  # y padded
-    return np.convolve(yp, np.ones(nf) / nf, mode="valid")  # y-smoothed
+    # Calculate number of filter elements (must be odd)
+    n = len(y)
+    nf = round(n * f * 2) // 2 + 1
+
+    # Precompute values to avoid repeated computation
+    first = y[0]
+    last = y[-1]
+    psize = nf // 2
+
+    # Avoid unnecessary multiplication for padding vectors
+    if psize > 0:
+        p_first = np.full(psize, first)
+        p_last = np.full(psize, last)
+        yp = np.concatenate((p_first, y, p_last), axis=0)
+    else:
+        yp = y
+
+    # Pre-allocate and pre-divide filter kernel to optimize convolution
+    kernel = np.full(nf, 1 / nf)
+    return np.convolve(yp, kernel, mode="valid")
 
 
 @plt_settings()
