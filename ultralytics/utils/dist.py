@@ -28,32 +28,37 @@ def find_free_network_port() -> int:
 def generate_ddp_file(trainer):
     """Generates a DDP file and returns its file name."""
     module, name = f"{trainer.__class__.__module__}.{trainer.__class__.__name__}".rsplit(".", 1)
+    overrides_dict = vars(trainer.args)
+    model_url = getattr(trainer.hub_session, "model_url", trainer.args.model)
+    # Build content via a list and join for improved performance with moderate string size
+    content_lines = [
+        "# Ultralytics Multi-GPU training temp file (should be automatically deleted after use)\n",
+        f"overrides = {overrides_dict}\n",
+        "\n",
+        'if __name__ == "__main__":\n',
+        f"    from {module} import {name}\n",
+        "    from ultralytics.utils import DEFAULT_CFG_DICT\n",
+        "\n",
+        "    cfg = DEFAULT_CFG_DICT.copy()\n",
+        "    cfg.update(save_dir='')   # handle the extra key 'save_dir'\n",
+        f"    trainer = {name}(cfg=cfg, overrides=overrides)\n",
+        f'    trainer.args.model = "{model_url}"\n',
+        "    results = trainer.train()\n",
+    ]
+    content = "".join(content_lines)
 
-    content = f"""
-# Ultralytics Multi-GPU training temp file (should be automatically deleted after use)
-overrides = {vars(trainer.args)}
-
-if __name__ == "__main__":
-    from {module} import {name}
-    from ultralytics.utils import DEFAULT_CFG_DICT
-
-    cfg = DEFAULT_CFG_DICT.copy()
-    cfg.update(save_dir='')   # handle the extra key 'save_dir'
-    trainer = {name}(cfg=cfg, overrides=overrides)
-    trainer.args.model = "{getattr(trainer.hub_session, "model_url", trainer.args.model)}"
-    results = trainer.train()
-"""
-    (USER_CONFIG_DIR / "DDP").mkdir(exist_ok=True)
+    ddp_dir = _ensure_ddp_dir()
+    # Use mode="w" (not w+) to avoid unnecessary read pointer efforts, as file is not read after write
     with tempfile.NamedTemporaryFile(
         prefix="_temp_",
         suffix=f"{id(trainer)}.py",
-        mode="w+",
+        mode="w",
         encoding="utf-8",
-        dir=USER_CONFIG_DIR / "DDP",
+        dir=ddp_dir,
         delete=False,
     ) as file:
         file.write(content)
-    return file.name
+        return file.name
 
 
 def generate_ddp_command(world_size, trainer):
@@ -68,7 +73,6 @@ def generate_ddp_command(world_size, trainer):
         cmd (List[str]): The command to execute for distributed training.
         file (str): Path to the temporary file created for DDP training.
     """
-    import __main__  # noqa local import to avoid https://github.com/Lightning-AI/lightning/issues/15218
 
     if not trainer.resume:
         shutil.rmtree(trainer.save_dir)  # remove the save_dir
@@ -83,3 +87,14 @@ def ddp_cleanup(trainer, file):
     """Delete temp file if created."""
     if f"{id(trainer)}.py" in file:  # if temp_file suffix in file
         os.remove(file)
+
+
+def _ensure_ddp_dir():
+    # Helper to minimize repeated DDP dir existence checks
+    ddp_path = USER_CONFIG_DIR / "DDP"
+    # Use exist_ok=False for performance, ignore FileExistsError if necessary
+    try:
+        os.mkdir(ddp_path)
+    except FileExistsError:
+        pass
+    return ddp_path
