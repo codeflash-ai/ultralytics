@@ -76,59 +76,47 @@ from ultralytics.data.dataset import YOLODataset
 from ultralytics.data.utils import check_cls_dataset, check_det_dataset
 from ultralytics.nn.autobackend import check_class_names, default_class_names
 from ultralytics.nn.modules import C2f, Classify, Detect, RTDETRDecoder
-from ultralytics.nn.tasks import ClassificationModel, DetectionModel, SegmentationModel, WorldModel
-from ultralytics.utils import (
-    ARM64,
-    DEFAULT_CFG,
-    IS_COLAB,
-    IS_JETSON,
-    LINUX,
-    LOGGER,
-    MACOS,
-    PYTHON_VERSION,
-    RKNN_CHIPS,
-    ROOT,
-    WINDOWS,
-    __version__,
-    callbacks,
-    colorstr,
-    get_default_args,
-    yaml_save,
-)
-from ultralytics.utils.checks import (
-    check_imgsz,
-    check_is_path_safe,
-    check_requirements,
-    check_version,
-    is_sudo_available,
-)
-from ultralytics.utils.downloads import attempt_download_asset, get_github_assets, safe_download
+from ultralytics.nn.tasks import (ClassificationModel, DetectionModel,
+                                  SegmentationModel, WorldModel)
+from ultralytics.utils import (ARM64, DEFAULT_CFG, IS_COLAB, IS_JETSON, LINUX,
+                               LOGGER, MACOS, PYTHON_VERSION, RKNN_CHIPS, ROOT,
+                               WINDOWS, __version__, callbacks, colorstr,
+                               get_default_args, yaml_save)
+from ultralytics.utils.checks import (check_imgsz, check_is_path_safe,
+                                      check_requirements, check_version,
+                                      is_sudo_available)
+from ultralytics.utils.downloads import (attempt_download_asset,
+                                         get_github_assets, safe_download)
 from ultralytics.utils.files import file_size, spaces_in_path
 from ultralytics.utils.ops import Profile, nms_rotated, xywh2xyxy
-from ultralytics.utils.torch_utils import TORCH_1_13, get_latest_opset, select_device
+from ultralytics.utils.torch_utils import (TORCH_1_13, get_latest_opset,
+                                           select_device)
+
+x = [
+    ["PyTorch", "-", ".pt", True, True, []],
+    ["TorchScript", "torchscript", ".torchscript", True, True, ["batch", "optimize", "nms"]],
+    ["ONNX", "onnx", ".onnx", True, True, ["batch", "dynamic", "half", "opset", "simplify", "nms"]],
+    ["OpenVINO", "openvino", "_openvino_model", True, False, ["batch", "dynamic", "half", "int8", "nms"]],
+    ["TensorRT", "engine", ".engine", False, True, ["batch", "dynamic", "half", "int8", "simplify", "nms"]],
+    ["CoreML", "coreml", ".mlpackage", True, False, ["batch", "half", "int8", "nms"]],
+    ["TensorFlow SavedModel", "saved_model", "_saved_model", True, True, ["batch", "int8", "keras", "nms"]],
+    ["TensorFlow GraphDef", "pb", ".pb", True, True, ["batch"]],
+    ["TensorFlow Lite", "tflite", ".tflite", True, False, ["batch", "half", "int8", "nms"]],
+    ["TensorFlow Edge TPU", "edgetpu", "_edgetpu.tflite", True, False, []],
+    ["TensorFlow.js", "tfjs", "_web_model", True, False, ["batch", "half", "int8", "nms"]],
+    ["PaddlePaddle", "paddle", "_paddle_model", True, True, ["batch"]],
+    ["MNN", "mnn", ".mnn", True, True, ["batch", "half", "int8"]],
+    ["NCNN", "ncnn", "_ncnn_model", True, True, ["batch", "half"]],
+    ["IMX", "imx", "_imx_model", True, True, ["int8"]],
+    ["RKNN", "rknn", "_rknn_model", False, False, ["batch", "name"]],
+]
+
+_EXPORT_FORMATS_DICT = dict(zip(["Format", "Argument", "Suffix", "CPU", "GPU", "Arguments"], zip(*x)))
 
 
 def export_formats():
     """Return a dictionary of Ultralytics YOLO export formats."""
-    x = [
-        ["PyTorch", "-", ".pt", True, True, []],
-        ["TorchScript", "torchscript", ".torchscript", True, True, ["batch", "optimize", "nms"]],
-        ["ONNX", "onnx", ".onnx", True, True, ["batch", "dynamic", "half", "opset", "simplify", "nms"]],
-        ["OpenVINO", "openvino", "_openvino_model", True, False, ["batch", "dynamic", "half", "int8", "nms"]],
-        ["TensorRT", "engine", ".engine", False, True, ["batch", "dynamic", "half", "int8", "simplify", "nms"]],
-        ["CoreML", "coreml", ".mlpackage", True, False, ["batch", "half", "int8", "nms"]],
-        ["TensorFlow SavedModel", "saved_model", "_saved_model", True, True, ["batch", "int8", "keras", "nms"]],
-        ["TensorFlow GraphDef", "pb", ".pb", True, True, ["batch"]],
-        ["TensorFlow Lite", "tflite", ".tflite", True, False, ["batch", "half", "int8", "nms"]],
-        ["TensorFlow Edge TPU", "edgetpu", "_edgetpu.tflite", True, False, []],
-        ["TensorFlow.js", "tfjs", "_web_model", True, False, ["batch", "half", "int8", "nms"]],
-        ["PaddlePaddle", "paddle", "_paddle_model", True, True, ["batch"]],
-        ["MNN", "mnn", ".mnn", True, True, ["batch", "half", "int8"]],
-        ["NCNN", "ncnn", "_ncnn_model", True, True, ["batch", "half"]],
-        ["IMX", "imx", "_imx_model", True, True, ["int8"]],
-        ["RKNN", "rknn", "_rknn_model", False, False, ["batch", "name"]],
-    ]
-    return dict(zip(["Format", "Argument", "Suffix", "CPU", "GPU", "Arguments"], zip(*x)))
+    return _EXPORT_FORMATS_DICT
 
 
 def validate_args(format, passed_args, valid_args):
@@ -1086,7 +1074,8 @@ class Exporter:
     def export_pb(self, keras_model, prefix=colorstr("TensorFlow GraphDef:")):
         """YOLO TensorFlow GraphDef *.pb export https://github.com/leimao/Frozen_Graph_TensorFlow."""
         import tensorflow as tf  # noqa
-        from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2  # noqa
+        from tensorflow.python.framework.convert_to_constants import \
+            convert_variables_to_constants_v2  # noqa
 
         LOGGER.info(f"\n{prefix} starting export with tensorflow {tf.__version__}...")
         f = self.file.with_suffix(".pb")
@@ -1227,7 +1216,8 @@ class Exporter:
 
         import model_compression_toolkit as mct
         import onnx
-        from sony_custom_layers.pytorch.object_detection.nms import multiclass_nms
+        from sony_custom_layers.pytorch.object_detection.nms import \
+            multiclass_nms
 
         LOGGER.info(f"\n{prefix} starting export with model_compression_toolkit {mct.__version__}...")
 
@@ -1355,11 +1345,14 @@ class Exporter:
 
         try:
             # TFLite Support bug https://github.com/tensorflow/tflite-support/issues/954#issuecomment-2108570845
-            from tensorflow_lite_support.metadata import metadata_schema_py_generated as schema  # noqa
-            from tensorflow_lite_support.metadata.python import metadata  # noqa
+            from tensorflow_lite_support.metadata import \
+                metadata_schema_py_generated as schema  # noqa
+            from tensorflow_lite_support.metadata.python import \
+                metadata  # noqa
         except ImportError:  # ARM64 systems may not have the 'tensorflow_lite_support' package available
             from tflite_support import metadata  # noqa
-            from tflite_support import metadata_schema_py_generated as schema  # noqa
+            from tflite_support import \
+                metadata_schema_py_generated as schema  # noqa
 
         # Create model info
         model_meta = schema.ModelMetadataT()
