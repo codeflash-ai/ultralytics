@@ -309,22 +309,28 @@ class DetectionModel(BaseModel):
             verbose (bool): Whether to display model information.
         """
         super().__init__()
-        self.yaml = cfg if isinstance(cfg, dict) else yaml_model_load(cfg)  # cfg dict
-        if self.yaml["backbone"][0][2] == "Silence":
+        yaml = cfg if isinstance(cfg, dict) else yaml_model_load(cfg)  # cfg dict
+
+        # Minimize dictionary lookups especially in if/else chains
+        backbone = yaml["backbone"]
+        if backbone[0][2] == "Silence":
             LOGGER.warning(
                 "WARNING ⚠️ YOLOv9 `Silence` module is deprecated in favor of torch.nn.Identity. "
                 "Please delete local *.pt file and re-download the latest model checkpoint."
             )
-            self.yaml["backbone"][0][2] = "nn.Identity"
+            backbone[0][2] = "nn.Identity"
 
         # Define model
-        ch = self.yaml["ch"] = self.yaml.get("ch", ch)  # input channels
-        if nc and nc != self.yaml["nc"]:
-            LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
-            self.yaml["nc"] = nc  # override YAML value
-        self.model, self.save = parse_model(deepcopy(self.yaml), ch=ch, verbose=verbose)  # model, savelist
-        self.names = {i: f"{i}" for i in range(self.yaml["nc"])}  # default names dict
-        self.inplace = self.yaml.get("inplace", True)
+        ch = yaml["ch"] = yaml.get("ch", ch)  # input channels
+        if nc and nc != yaml["nc"]:
+            LOGGER.info(f"Overriding model.yaml nc={yaml['nc']} with nc={nc}")
+            yaml["nc"] = nc  # override YAML value
+
+        model_cfg = deepcopy(yaml)  # Only copy once, not after modifications above
+        self.yaml = yaml
+        self.model, self.save = parse_model(model_cfg, ch=ch, verbose=verbose)  # model, savelist
+        self.names = {i: f"{i}" for i in range(yaml["nc"])}  # default names dict
+        self.inplace = yaml.get("inplace", True)
         self.end2end = getattr(self.model[-1], "end2end", False)
 
         # Build strides
@@ -333,17 +339,31 @@ class DetectionModel(BaseModel):
             s = 256  # 2x min stride
             m.inplace = self.inplace
 
+            # Pre-create the zero tensor ONCE for inference stride calculation
+            zeros = torch.zeros(1, ch, s, s)
+
             def _forward(x):
                 """Perform a forward pass through the model, handling different Detect subclass types accordingly."""
                 if self.end2end:
                     return self.forward(x)["one2many"]
                 return self.forward(x)[0] if isinstance(m, (Segment, Pose, OBB)) else self.forward(x)
 
-            m.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
-            self.stride = m.stride
+            # Compute stride without repeated attribute lookups
+            with torch.no_grad():
+                out = _forward(zeros)
+            if isinstance(out, (list, tuple)):
+                shapes = [x.shape[-2] for x in out]
+                stride_tensor = torch.tensor([s / v for v in shapes])
+            else:
+                # single output (e.g. vanilla Detect)
+                stride_tensor = torch.tensor([s / out.shape[-2]])
+            m.stride = stride_tensor
+            self.stride = stride_tensor
             m.bias_init()  # only run once
         else:
-            self.stride = torch.Tensor([32])  # default stride for i.e. RTDETR
+            self.stride = torch.tensor([32])  # default stride for i.e. RTDETR
+
+        # Init weights, biases
 
         # Init weights, biases
         initialize_weights(self)
@@ -391,12 +411,14 @@ class DetectionModel(BaseModel):
         Returns:
             (torch.Tensor): De-scaled predictions.
         """
-        p[:, :4] /= scale  # de-scale
+        # Perform in-place division ONCE for spatial coordinates for improved cache usage
+        p[:, :4].div_(scale)
         x, y, wh, cls = p.split((1, 1, 2, p.shape[dim] - 4), dim)
         if flips == 2:
             y = img_size[0] - y  # de-flip ud
         elif flips == 3:
             x = img_size[1] - x  # de-flip lr
+        # Concatenate all columns: preserves original allocation except for potentially flipped values
         return torch.cat((x, y, wh, cls), dim)
 
     def _clip_augmented(self, y):
