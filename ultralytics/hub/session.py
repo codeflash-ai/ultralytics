@@ -13,6 +13,12 @@ from ultralytics.hub.utils import HELP_MSG, HUB_WEB_ROOT, PREFIX, TQDM
 from ultralytics.utils import IS_COLAB, LOGGER, SETTINGS, __version__, checks, emojis
 from ultralytics.utils.errors import HUBModelError
 
+_RETRY_CODES = {
+    HTTPStatus.REQUEST_TIMEOUT,
+    HTTPStatus.BAD_GATEWAY,
+    HTTPStatus.GATEWAY_TIMEOUT,
+}
+
 AGENT_NAME = f"python-{__version__}-colab" if IS_COLAB else f"python-{__version__}-local"
 
 
@@ -336,12 +342,7 @@ class HUBTrainingSession:
         Returns:
             (bool): True if the request should be retried, False otherwise.
         """
-        retry_codes = {
-            HTTPStatus.REQUEST_TIMEOUT,
-            HTTPStatus.BAD_GATEWAY,
-            HTTPStatus.GATEWAY_TIMEOUT,
-        }
-        return status_code in retry_codes
+        return status_code in _RETRY_CODES
 
     def _get_failure_message(self, response: requests.Response, retry: int, timeout: int):
         """
