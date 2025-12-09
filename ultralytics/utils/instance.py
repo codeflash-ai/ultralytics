@@ -472,11 +472,14 @@ class Instances:
 
         cat_boxes = np.concatenate([ins.bboxes for ins in instances_list], axis=axis)
         seg_len = [b.segments.shape[1] for b in instances_list]
-        if len(frozenset(seg_len)) > 1:  # resample segments if there's different length
+        num_unique = len(frozenset(seg_len))
+        if num_unique > 1:  # resample segments if there's different length
             max_len = max(seg_len)
             cat_segments = np.concatenate(
                 [
                     resample_segments(list(b.segments), max_len)
+                    if b.segments.shape[1] != max_len and len(b.segments) > 0
+                    else b.segments
                     if len(b.segments)
                     else np.zeros((0, max_len, 2), dtype=np.float32)  # re-generating empty segments
                     for b in instances_list

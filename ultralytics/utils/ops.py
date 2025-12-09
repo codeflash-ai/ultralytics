@@ -645,16 +645,30 @@ def resample_segments(segments, n=1000):
     Returns:
         segments (list): The resampled segments.
     """
+    if all(len(s) == n for s in segments):  # Quick path if already correct
+        return segments
+
     for i, s in enumerate(segments):
         if len(s) == n:
             continue
-        s = np.concatenate((s, s[0:1, :]), axis=0)
-        x = np.linspace(0, len(s) - 1, n - len(s) if len(s) < n else n)
-        xp = np.arange(len(s))
-        x = np.insert(x, np.searchsorted(x, xp), xp) if len(s) < n else x
-        segments[i] = (
-            np.concatenate([np.interp(x, xp, s[:, i]) for i in range(2)], dtype=np.float32).reshape(2, -1).T
-        )  # segment xy
+        # Add the starting point to the end to close the segment
+        s_closed = np.vstack((s, s[0]))
+        m = len(s_closed)
+        xp = np.arange(m)
+        # For upsampling: If segment is shorter, make sure to include all existing points by merging
+        if len(s) < n:
+            # Build insertion indices for xp into upsampled x
+            x_extra = np.linspace(0, m - 1, n - m)
+            x = np.sort(np.concatenate((x_extra, xp)))
+        else:
+            x = np.linspace(0, m - 1, n)
+        # Interpolate each coordinate in vectorized fashion
+        # This avoids python loops over coordinates
+        resampled = np.empty((n, 2), dtype=np.float32)
+        resampled[:, 0] = np.interp(x, xp, s_closed[:, 0])
+        resampled[:, 1] = np.interp(x, xp, s_closed[:, 1])
+        segments[i] = resampled
+
     return segments
 
 
