@@ -1305,36 +1305,78 @@ def guess_model_task(model):
             return cfg2task(model)
     # Guess from PyTorch model
     if isinstance(model, torch.nn.Module):  # PyTorch model
-        for x in "model.args", "model.model.args", "model.model.model.args":
-            with contextlib.suppress(Exception):
-                return eval(x)["task"]
-        for x in "model.yaml", "model.model.yaml", "model.model.model.yaml":
-            with contextlib.suppress(Exception):
-                return cfg2task(eval(x))
+        # Avoid multiple eval calls by checking for attributes directly
+        for attr in ("args",):
+            d = model.__dict__.get(attr)
+            if isinstance(d, dict) and "task" in d:
+                return d["task"]
+        mm = getattr(model, "model", None)
+        if mm:
+            for attr in ("args",):
+                d = mm.__dict__.get(attr)
+                if isinstance(d, dict) and "task" in d:
+                    return d["task"]
+            mmm = getattr(mm, "model", None)
+            if mmm:
+                for attr in ("args",):
+                    d = mmm.__dict__.get(attr)
+                    if isinstance(d, dict) and "task" in d:
+                        return d["task"]
+
+        for attr in ("yaml",):
+            d = model.__dict__.get(attr)
+            if isinstance(d, dict):
+                with contextlib.suppress(Exception):
+                    return cfg2task(d)
+        if mm:
+            for attr in ("yaml",):
+                d = mm.__dict__.get(attr)
+                if isinstance(d, dict):
+                    with contextlib.suppress(Exception):
+                        return cfg2task(d)
+            mmm = getattr(mm, "model", None)
+            if mmm:
+                for attr in ("yaml",):
+                    d = mmm.__dict__.get(attr)
+                    if isinstance(d, dict):
+                        with contextlib.suppress(Exception):
+                            return cfg2task(d)
+
+        # Optimize the isinstance checks using a set for class types to minimize lookups
+        # Use isinstance with tuple for Detect types
+        detect_types = (Detect, WorldDetect, v10Detect)
         for m in model.modules():
             if isinstance(m, Segment):
                 return "segment"
-            elif isinstance(m, Classify):
+            if isinstance(m, Classify):
                 return "classify"
-            elif isinstance(m, Pose):
+            if isinstance(m, Pose):
                 return "pose"
-            elif isinstance(m, OBB):
+            if isinstance(m, OBB):
                 return "obb"
-            elif isinstance(m, (Detect, WorldDetect, v10Detect)):
+            if isinstance(m, detect_types):
                 return "detect"
 
     # Guess from model filename
     if isinstance(model, (str, Path)):
-        model = Path(model)
-        if "-seg" in model.stem or "segment" in model.parts:
+        # Don't construct Path again if already a Path
+        model_path = model if isinstance(model, Path) else Path(model)
+        stem = model_path.stem
+        parts = model_path.parts
+
+        # Build a set for membership tests
+        parts_set = set(parts)
+
+        # Reorder checks so "-seg" and "segment" are tested first, then "classify"/"cls", etc.
+        if "-seg" in stem or "segment" in parts_set:
             return "segment"
-        elif "-cls" in model.stem or "classify" in model.parts:
+        if "-cls" in stem or "classify" in parts_set:
             return "classify"
-        elif "-pose" in model.stem or "pose" in model.parts:
+        if "-pose" in stem or "pose" in parts_set:
             return "pose"
-        elif "-obb" in model.stem or "obb" in model.parts:
+        if "-obb" in stem or "obb" in parts_set:
             return "obb"
-        elif "detect" in model.parts:
+        if "detect" in parts_set:
             return "detect"
 
     # Unable to determine task from model
