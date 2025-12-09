@@ -186,12 +186,22 @@ def _get_covariance_matrix(boxes):
         (torch.Tensor): Covariance matrices corresponding to original rotated bounding boxes.
     """
     # Gaussian bounding boxes, ignore the center points (the first two columns) because they are not needed here.
-    gbbs = torch.cat((boxes[:, 2:4].pow(2) / 12, boxes[:, 4:]), dim=-1)
-    a, b, c = gbbs.split(1, dim=-1)
-    cos = c.cos()
-    sin = c.sin()
+    w_sq = boxes[:, 2].pow(2) / 12
+    h_sq = boxes[:, 3].pow(2) / 12
+    angles = boxes[:, 4]
+    cos = angles.cos()
+    sin = angles.sin()
     cos2 = cos.pow(2)
     sin2 = sin.pow(2)
+
+    a = w_sq.unsqueeze(-1)
+    b = h_sq.unsqueeze(-1)
+    c = angles.unsqueeze(-1)
+    cos = cos.unsqueeze(-1)
+    sin = sin.unsqueeze(-1)
+    cos2 = cos2.unsqueeze(-1)
+    sin2 = sin2.unsqueeze(-1)
+
     return a * cos2 + b * sin2, a * sin2 + b * cos2, (a - b) * cos * sin
 
 
@@ -254,23 +264,46 @@ def batch_probiou(obb1, obb2, eps=1e-7):
     References:
         https://arxiv.org/pdf/2106.06072v1.pdf
     """
-    obb1 = torch.from_numpy(obb1) if isinstance(obb1, np.ndarray) else obb1
-    obb2 = torch.from_numpy(obb2) if isinstance(obb2, np.ndarray) else obb2
+    # Convert np.ndarray to torch only if needed
+    if isinstance(obb1, np.ndarray):
+        obb1 = torch.from_numpy(obb1)
+    if isinstance(obb2, np.ndarray):
+        obb2 = torch.from_numpy(obb2)
 
-    x1, y1 = obb1[..., :2].split(1, dim=-1)
-    x2, y2 = (x.squeeze(-1)[None] for x in obb2[..., :2].split(1, dim=-1))
+    # Avoid split and squeeze, use slicing and unsqueeze for better efficiency
+    x1 = obb1[:, 0].unsqueeze(1)
+    y1 = obb1[:, 1].unsqueeze(1)
+    x2 = obb2[:, 0].unsqueeze(0)
+    y2 = obb2[:, 1].unsqueeze(0)
+
     a1, b1, c1 = _get_covariance_matrix(obb1)
-    a2, b2, c2 = (x.squeeze(-1)[None] for x in _get_covariance_matrix(obb2))
+    a2, b2, c2 = _get_covariance_matrix(obb2)
+    # Reshape cov matrices for broadcasting: [N,1], [1,M]
+    a1 = a1  # [N,1]
+    b1 = b1
+    c1 = c1
+    a2 = a2.transpose(0, 1)  # [1,M]
+    b2 = b2.transpose(0, 1)
+    c2 = c2.transpose(0, 1)
 
-    t1 = (
-        ((a1 + a2) * (y1 - y2).pow(2) + (b1 + b2) * (x1 - x2).pow(2)) / ((a1 + a2) * (b1 + b2) - (c1 + c2).pow(2) + eps)
-    ) * 0.25
-    t2 = (((c1 + c2) * (x2 - x1) * (y1 - y2)) / ((a1 + a2) * (b1 + b2) - (c1 + c2).pow(2) + eps)) * 0.5
-    t3 = (
-        ((a1 + a2) * (b1 + b2) - (c1 + c2).pow(2))
-        / (4 * ((a1 * b1 - c1.pow(2)).clamp_(0) * (a2 * b2 - c2.pow(2)).clamp_(0)).sqrt() + eps)
-        + eps
-    ).log() * 0.5
+    # Broadcasted math
+    a1a2 = a1 + a2  # [N,M]
+    b1b2 = b1 + b2
+    c1c2 = c1 + c2
+    x1_x2 = x1 - x2  # [N, M]
+    y1_y2 = y1 - y2
+
+    den = a1a2 * b1b2 - c1c2.pow(2) + eps
+    t1 = ((a1a2 * y1_y2.pow(2) + b1b2 * x1_x2.pow(2)) / den) * 0.25
+    t2 = ((c1c2 * (x2 - x1) * y1_y2) / den) * 0.5
+
+    # Determinant compound
+    det1 = (a1 * b1 - c1.pow(2)).clamp_min(0)
+    det2 = (a2 * b2 - c2.pow(2)).clamp_min(0)
+    denom_sqrt = 4 * (det1 * det2).sqrt() + eps
+    t3arg = (a1a2 * b1b2 - c1c2.pow(2)) / denom_sqrt + eps
+    t3 = t3arg.log() * 0.5
+
     bd = (t1 + t2 + t3).clamp(eps, 100.0)
     hd = (1.0 - (-bd).exp() + eps).sqrt()
     return 1 - hd
