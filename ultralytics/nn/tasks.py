@@ -86,6 +86,8 @@ from ultralytics.utils.torch_utils import (
     time_sync,
 )
 
+_YOLO_SCALE_PATTERN = re.compile(r"yolo[v]?\d+([nslmx])")
+
 try:
     import thop
 except ImportError:
@@ -1268,10 +1270,9 @@ def guess_model_scale(model_path):
     Returns:
         (str): The size character of the model's scale (n, s, m, l, or x).
     """
-    try:
-        return re.search(r"yolo[v]?\d+([nslmx])", Path(model_path).stem).group(1)  # returns n, s, m, l, or x
-    except AttributeError:
-        return ""
+    stem = Path(model_path).stem
+    m = _YOLO_SCALE_PATTERN.search(stem)
+    return m.group(1) if m else ""
 
 
 def guess_model_task(model):
