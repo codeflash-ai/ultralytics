@@ -2,7 +2,6 @@
 """Base callbacks for Ultralytics training, validation, prediction, and export processes."""
 
 from collections import defaultdict
-from copy import deepcopy
 
 # Trainer callbacks ----------------------------------------------------------------------------------------------------
 
@@ -181,7 +180,7 @@ def get_default_callbacks():
     Returns:
         (defaultdict): A defaultdict with keys from default_callbacks and empty lists as default values.
     """
-    return defaultdict(list, deepcopy(default_callbacks))
+    return defaultdict(list, {k: v.copy() for k, v in default_callbacks.items()})
 
 
 def add_integration_callbacks(instance):
