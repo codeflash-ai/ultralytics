@@ -63,12 +63,43 @@ def box_iou(box1, box2, eps=1e-7):
         (torch.Tensor): An NxM tensor containing the pairwise IoU values for every element in box1 and box2.
     """
     # NOTE: Need .float() to get accurate iou values
-    # inter(N,M) = (rb(N,M,2) - lt(N,M,2)).clamp(0).prod(2)
-    (a1, a2), (b1, b2) = box1.float().unsqueeze(1).chunk(2, 2), box2.float().unsqueeze(0).chunk(2, 2)
-    inter = (torch.min(a2, b2) - torch.max(a1, b1)).clamp_(0).prod(2)
 
-    # IoU = inter / (area1 + area2 - inter)
-    return inter / ((a2 - a1).prod(2) + (b2 - b1).prod(2) - inter + eps)
+    # Move float conversion out of chunk for efficiency.
+    box1 = box1.float()
+    box2 = box2.float()
+    # Unpack coordinates directly for reduced overhead and clarity.
+    # box1: (N, 4), box2: (M, 4)
+    a1x, a1y, a2x, a2y = box1[:, 0], box1[:, 1], box1[:, 2], box1[:, 3]
+    b1x, b1y, b2x, b2y = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
+
+    # Shape manipulation for broadcasting
+    a1x = a1x[:, None]
+    a1y = a1y[:, None]
+    a2x = a2x[:, None]
+    a2y = a2y[:, None]
+
+    b1x = b1x[None, :]
+    b1y = b1y[None, :]
+    b2x = b2x[None, :]
+    b2y = b2y[None, :]
+
+    # Compute intersection coordinates
+    x1 = torch.max(a1x, b1x)
+    y1 = torch.max(a1y, b1y)
+    x2 = torch.min(a2x, b2x)
+    y2 = torch.min(a2y, b2y)
+
+    # Compute width and height of intersection, clamp at 0, multiply for intersection area
+    inter_w = (x2 - x1).clamp(min=0)
+    inter_h = (y2 - y1).clamp(min=0)
+    inter = inter_w * inter_h
+
+    # Areas
+    area1 = (a2x - a1x) * (a2y - a1y)  # Shape: (N, 1)
+    area2 = (b2x - b1x) * (b2y - b1y)  # Shape: (1, M)
+
+    # IoU
+    return inter / (area1 + area2 - inter + eps)
 
 
 def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7):
