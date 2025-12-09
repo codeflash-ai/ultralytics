@@ -844,7 +844,7 @@ class DetMetrics(SimpleClass):
         task (str): The task type, set to 'detect'.
     """
 
-    def __init__(self, save_dir=Path("."), plot=False, names={}) -> None:
+    def __init__(self, save_dir=Path("."), plot=False, names=None) -> None:
         """
         Initialize a DetMetrics instance with a save directory, plot flag, and class names.
 
@@ -855,7 +855,7 @@ class DetMetrics(SimpleClass):
         """
         self.save_dir = save_dir
         self.plot = plot
-        self.names = names
+        self.names = {} if names is None else names
         self.box = Metric()
         self.speed = {"preprocess": 0.0, "inference": 0.0, "loss": 0.0, "postprocess": 0.0}
         self.task = "detect"
