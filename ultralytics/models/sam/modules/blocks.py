@@ -247,7 +247,12 @@ class Fuser(nn.Module):
         """
         super().__init__()
         self.proj = nn.Identity()
-        self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(num_layers)])
+        # Optimize deepcopy usage: only deepcopy if num_layers > 1 (saves overhead for single layer)
+        if num_layers == 1:
+            self.layers = nn.ModuleList([layer])
+        else:
+            # Use copy.deepcopy only when more than one layer to avoid unnecessary overhead
+            self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(num_layers)])
 
         if input_projection:
             assert dim is not None
@@ -256,8 +261,13 @@ class Fuser(nn.Module):
     def forward(self, x):
         """Applies a series of layers to the input tensor, optionally projecting it first."""
         x = self.proj(x)
-        for layer in self.layers:
-            x = layer(x)
+        # Unroll for-loop for typical cases (minor speed improvement for small num_layers)
+        num = len(self.layers)
+        if num == 1:
+            x = self.layers[0](x)
+        else:
+            for layer in self.layers:
+                x = layer(x)
         return x
 
 
