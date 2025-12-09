@@ -58,14 +58,16 @@ def get_hash(paths):
 def exif_size(img: Image.Image):
     """Returns exif-corrected PIL size."""
     s = img.size  # (width, height)
-    if img.format == "JPEG":  # only support JPEG images
-        try:
-            if exif := img.getexif():
-                rotation = exif.get(274, None)  # the EXIF key for the orientation tag is 274
+    if img.format != "JPEG":  # only support JPEG images
+        return s
+    try:
+        if exif := img.getexif():
+            if 274 in exif:
+                rotation = exif[274]  # the EXIF key for the orientation tag is 274
                 if rotation in {6, 8}:  # rotation 270 or 90
                     s = s[1], s[0]
-        except Exception:
-            pass
+    except Exception:
+        pass
     return s
 
 
