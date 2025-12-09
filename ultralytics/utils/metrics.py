@@ -1018,7 +1018,10 @@ class SegmentMetrics(SimpleClass):
 
     def class_result(self, i):
         """Return classification results for a specified class index."""
-        return self.box.class_result(i) + self.seg.class_result(i)
+        # Avoid unnecessary tuple+tuple concat in python -- create a single tuple inline.
+        box_res = self.box.class_result(i)
+        seg_res = self.seg.class_result(i)
+        return (*box_res, *seg_res)
 
     @property
     def maps(self):
