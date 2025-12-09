@@ -148,8 +148,10 @@ def mask_iou(mask1, mask2, eps=1e-7):
     Returns:
         (torch.Tensor): A tensor of shape (N, M) representing masks IoU.
     """
+    area1 = mask1.sum(dim=1, keepdim=True)
+    area2 = mask2.sum(dim=1, keepdim=True)
     intersection = torch.matmul(mask1, mask2.T).clamp_(0)
-    union = (mask1.sum(1)[:, None] + mask2.sum(1)[None]) - intersection  # (area1 + area2) - intersection
+    union = area1 + area2.T - intersection
     return intersection / (union + eps)
 
 
