@@ -1,6 +1,5 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
-import copy
 
 import cv2
 import numpy as np
@@ -139,7 +138,9 @@ class GMC:
         # Downscale image
         if self.downscale > 1.0:
             frame = cv2.GaussianBlur(frame, (3, 3), 1.5)
-            frame = cv2.resize(frame, (width // self.downscale, height // self.downscale))
+            dsheight, dswidth = height // self.downscale, width // self.downscale
+            frame = cv2.resize(frame, (dswidth, dsheight))
+        # Handle first frame
 
         # Handle first frame
         if not self.initializedFirstFrame:
@@ -184,17 +185,15 @@ class GMC:
 
         # Downscale image
         if self.downscale > 1.0:
-            frame = cv2.resize(frame, (width // self.downscale, height // self.downscale))
-            width = width // self.downscale
-            height = height // self.downscale
+            dswidth = width // self.downscale
+            dsheight = height // self.downscale
+            frame = cv2.resize(frame, (dswidth, dsheight))
+            width, height = dswidth, dsheight
 
-        # Find the keypoints
-        mask = np.zeros_like(frame)
-        mask[int(0.02 * height) : int(0.98 * height), int(0.02 * width) : int(0.98 * width)] = 255
-        if detections is not None:
-            for det in detections:
-                tlbr = (det[:4] / self.downscale).astype(np.int_)
-                mask[tlbr[1] : tlbr[3], tlbr[0] : tlbr[2]] = 0
+        # Mask preparation (optimized)
+        mask = self._prepare_mask(frame, width, height, detections, self.downscale)
+
+        # Feature detection and extraction (no changes due to OpenCV calls, but avoid redundant operations)
 
         keypoints = self.detector.detect(frame, mask)
 
@@ -205,8 +204,10 @@ class GMC:
         if not self.initializedFirstFrame:
             # Initialize data
             self.prevFrame = frame.copy()
-            self.prevKeyPoints = copy.copy(keypoints)
-            self.prevDescriptors = copy.copy(descriptors)
+            # Use list instead of copy.copy for simple and likely faster copy (keypoints is a list already)
+            self.prevKeyPoints = keypoints[:]
+            # For large arrays, np.copy is preferable for performance over copy.copy
+            self.prevDescriptors = np.copy(descriptors) if descriptors is not None else None
 
             # Initialization done
             self.initializedFirstFrame = True
@@ -226,43 +227,42 @@ class GMC:
         if len(knnMatches) == 0:
             # Store to next iteration
             self.prevFrame = frame.copy()
-            self.prevKeyPoints = copy.copy(keypoints)
-            self.prevDescriptors = copy.copy(descriptors)
+            self.prevKeyPoints = keypoints[:]
+            self.prevDescriptors = np.copy(descriptors) if descriptors is not None else None
 
             return H
 
         for m, n in knnMatches:
             if m.distance < 0.9 * n.distance:
-                prevKeyPointLocation = self.prevKeyPoints[m.queryIdx].pt
-                currKeyPointLocation = keypoints[m.trainIdx].pt
+                prev_pt = self.prevKeyPoints[m.queryIdx].pt
+                curr_pt = keypoints[m.trainIdx].pt
 
-                spatialDistance = (
-                    prevKeyPointLocation[0] - currKeyPointLocation[0],
-                    prevKeyPointLocation[1] - currKeyPointLocation[1],
-                )
+                dx = prev_pt[0] - curr_pt[0]
+                dy = prev_pt[1] - curr_pt[1]
 
-                if (np.abs(spatialDistance[0]) < maxSpatialDistance[0]) and (
-                    np.abs(spatialDistance[1]) < maxSpatialDistance[1]
-                ):
-                    spatialDistances.append(spatialDistance)
+                if abs(dx) < maxSpatialDistance[0] and abs(dy) < maxSpatialDistance[1]:
+                    spatialDistances.append((dx, dy))
                     matches.append(m)
 
-        meanSpatialDistances = np.mean(spatialDistances, 0)
-        stdSpatialDistances = np.std(spatialDistances, 0)
+        if len(spatialDistances) == 0:
+            self.prevFrame = frame.copy()
+            self.prevKeyPoints = keypoints[:]
+            self.prevDescriptors = np.copy(descriptors) if descriptors is not None else None
+            return H
 
-        inliers = (spatialDistances - meanSpatialDistances) < 2.5 * stdSpatialDistances
+        # Use numpy array directly for mean/std/bool indexing
+        spatialDistances_np = np.array(spatialDistances)
+        meanSpatialDistances = np.mean(spatialDistances_np, axis=0)
+        stdSpatialDistances = np.std(spatialDistances_np, axis=0)
+        inliers = (spatialDistances_np - meanSpatialDistances) < (2.5 * stdSpatialDistances)
 
-        goodMatches = []
-        prevPoints = []
-        currPoints = []
-        for i in range(len(matches)):
-            if inliers[i, 0] and inliers[i, 1]:
-                goodMatches.append(matches[i])
-                prevPoints.append(self.prevKeyPoints[matches[i].queryIdx].pt)
-                currPoints.append(keypoints[matches[i].trainIdx].pt)
+        # Use boolean indexing for goodMatches/points (optimized)
+        good_inliers_idx = np.where(np.logical_and(inliers[:, 0], inliers[:, 1]))[0]
+        goodMatches = [matches[i] for i in good_inliers_idx]
+        prevPoints = np.array([self.prevKeyPoints[matches[i].queryIdx].pt for i in good_inliers_idx])
+        currPoints = np.array([keypoints[matches[i].trainIdx].pt for i in good_inliers_idx])
 
-        prevPoints = np.array(prevPoints)
-        currPoints = np.array(currPoints)
+        # Find rigid matrix if enough good matches
 
         # Draw the keypoint matches on the output image
         # if False:
@@ -287,19 +287,20 @@ class GMC:
 
         # Find rigid matrix
         if prevPoints.shape[0] > 4:
-            H, inliers = cv2.estimateAffinePartial2D(prevPoints, currPoints, cv2.RANSAC)
-
-            # Handle downscale
-            if self.downscale > 1.0:
-                H[0, 2] *= self.downscale
-                H[1, 2] *= self.downscale
+            H_res, inliers = cv2.estimateAffinePartial2D(prevPoints, currPoints, cv2.RANSAC)
+            if H_res is not None:
+                H = H_res
+                # Handle downscale
+                if self.downscale > 1.0:
+                    H[0, 2] *= self.downscale
+                    H[1, 2] *= self.downscale
         else:
             LOGGER.warning("WARNING: not enough matching points")
 
         # Store to next iteration
         self.prevFrame = frame.copy()
-        self.prevKeyPoints = copy.copy(keypoints)
-        self.prevDescriptors = copy.copy(descriptors)
+        self.prevKeyPoints = keypoints[:]
+        self.prevDescriptors = np.copy(descriptors) if descriptors is not None else None
 
         return H
 
@@ -326,7 +327,9 @@ class GMC:
 
         # Downscale image
         if self.downscale > 1.0:
-            frame = cv2.resize(frame, (width // self.downscale, height // self.downscale))
+            dswidth = width // self.downscale
+            dsheight = height // self.downscale
+            frame = cv2.resize(frame, (dswidth, dsheight))
 
         # Find the keypoints
         keypoints = cv2.goodFeaturesToTrack(frame, mask=None, **self.feature_params)
@@ -334,37 +337,41 @@ class GMC:
         # Handle first frame
         if not self.initializedFirstFrame or self.prevKeyPoints is None:
             self.prevFrame = frame.copy()
-            self.prevKeyPoints = copy.copy(keypoints)
+            # keypoints is ndarray or None
+            self.prevKeyPoints = keypoints.copy() if keypoints is not None else None
             self.initializedFirstFrame = True
             return H
 
         # Find correspondences
         matchedKeypoints, status, _ = cv2.calcOpticalFlowPyrLK(self.prevFrame, frame, self.prevKeyPoints, None)
+        if status is None or matchedKeypoints is None or self.prevKeyPoints is None:
+            self.prevFrame = frame.copy()
+            self.prevKeyPoints = keypoints.copy() if keypoints is not None else None
+            return H
 
-        # Leave good correspondences only
-        prevPoints = []
-        currPoints = []
-
-        for i in range(len(status)):
-            if status[i]:
-                prevPoints.append(self.prevKeyPoints[i])
-                currPoints.append(matchedKeypoints[i])
-
-        prevPoints = np.array(prevPoints)
-        currPoints = np.array(currPoints)
+        # Fast boolean indexing for good correspondences
+        status = status.reshape(-1)
+        idxs = np.where(status)[0]
+        if idxs.size > 0:
+            prevPoints = np.array([self.prevKeyPoints[i] for i in idxs])
+            currPoints = matchedKeypoints[idxs]
+        else:
+            prevPoints = np.empty((0, 1, 2))
+            currPoints = np.empty((0, 1, 2))
 
         # Find rigid matrix
         if (prevPoints.shape[0] > 4) and (prevPoints.shape[0] == currPoints.shape[0]):
-            H, _ = cv2.estimateAffinePartial2D(prevPoints, currPoints, cv2.RANSAC)
-
-            if self.downscale > 1.0:
-                H[0, 2] *= self.downscale
-                H[1, 2] *= self.downscale
+            H_res, _ = cv2.estimateAffinePartial2D(prevPoints, currPoints, cv2.RANSAC)
+            if H_res is not None:
+                H = H_res
+                if self.downscale > 1.0:
+                    H[0, 2] *= self.downscale
+                    H[1, 2] *= self.downscale
         else:
             LOGGER.warning("WARNING: not enough matching points")
 
         self.prevFrame = frame.copy()
-        self.prevKeyPoints = copy.copy(keypoints)
+        self.prevKeyPoints = keypoints.copy() if keypoints is not None else None
 
         return H
 
@@ -374,3 +381,19 @@ class GMC:
         self.prevKeyPoints = None
         self.prevDescriptors = None
         self.initializedFirstFrame = False
+
+    def _prepare_mask(self, frame: np.ndarray, width: int, height: int, detections: list, downscale: int) -> np.ndarray:
+        # Helper for mask preparation, optimized for bulk assignment
+        mask = np.zeros_like(frame)
+        y0, y1 = int(0.02 * height), int(0.98 * height)
+        x0, x1 = int(0.02 * width), int(0.98 * width)
+        mask[y0:y1, x0:x1] = 255
+        if detections is not None and len(detections) > 0:
+            # Vectorized zeroing
+            dets = np.empty((len(detections), 4), dtype=np.int32)
+            # Convert all detection boxes at once, exploiting np arrays
+            det_arr = np.array([det[:4] for det in detections])
+            np.floor_divide(det_arr, downscale, out=dets)
+            for tlbr in dets:
+                mask[tlbr[1] : tlbr[3], tlbr[0] : tlbr[2]] = 0
+        return mask
