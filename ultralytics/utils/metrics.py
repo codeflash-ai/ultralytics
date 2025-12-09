@@ -693,6 +693,7 @@ class Metric(SimpleClass):
         self.all_ap = []  # (nc, 10)
         self.ap_class_index = []  # (nc, )
         self.nc = 0
+        self._fitness_weights = np.array([0.0, 0.0, 0.1, 0.9])  # weights for [P, R, mAP@0.5, mAP@0.5:0.95]
 
     @property
     def ap50(self):
@@ -782,8 +783,7 @@ class Metric(SimpleClass):
 
     def fitness(self):
         """Return model fitness as a weighted combination of metrics."""
-        w = [0.0, 0.0, 0.1, 0.9]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95]
-        return (np.array(self.mean_results()) * w).sum()
+        return np.dot(self.mean_results(), self._fitness_weights)
 
     def update(self, results):
         """
