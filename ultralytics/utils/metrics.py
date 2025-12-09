@@ -63,12 +63,26 @@ def box_iou(box1, box2, eps=1e-7):
         (torch.Tensor): An NxM tensor containing the pairwise IoU values for every element in box1 and box2.
     """
     # NOTE: Need .float() to get accurate iou values
-    # inter(N,M) = (rb(N,M,2) - lt(N,M,2)).clamp(0).prod(2)
-    (a1, a2), (b1, b2) = box1.float().unsqueeze(1).chunk(2, 2), box2.float().unsqueeze(0).chunk(2, 2)
-    inter = (torch.min(a2, b2) - torch.max(a1, b1)).clamp_(0).prod(2)
+    box1 = box1.float()
+    box2 = box2.float()
+    N = box1.shape[0]
+    M = box2.shape[0]
+    if N == 0 or M == 0:
+        return torch.zeros((N, M), dtype=box1.dtype, device=box1.device)
 
-    # IoU = inter / (area1 + area2 - inter)
-    return inter / ((a2 - a1).prod(2) + (b2 - b1).prod(2) - inter + eps)
+    # a1 = (N,2), a2 = (N,2), b1 = (M,2), b2 = (M,2)
+    a1 = box1[:, :2][:, None, :]  # (N, 1, 2)
+    a2 = box1[:, 2:][:, None, :]
+    b1 = box2[:, :2][None, :, :]  # (1, M, 2)
+    b2 = box2[:, 2:][None, :, :]
+
+    inter_wh = (torch.min(a2, b2) - torch.max(a1, b1)).clamp(min=0)  # (N, M, 2)
+    inter = inter_wh[..., 0] * inter_wh[..., 1]  # (N, M)
+    area1 = ((box1[:, 2] - box1[:, 0]) * (box1[:, 3] - box1[:, 1]))[:, None]  # (N, 1)
+    area2 = ((box2[:, 2] - box2[:, 0]) * (box2[:, 3] - box2[:, 1]))[None, :]  # (1, M)
+    union = area1 + area2 - inter
+
+    return inter / (union + eps)
 
 
 def bbox_iou(box1, box2, xywh=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7):
@@ -257,20 +271,31 @@ def batch_probiou(obb1, obb2, eps=1e-7):
     obb1 = torch.from_numpy(obb1) if isinstance(obb1, np.ndarray) else obb1
     obb2 = torch.from_numpy(obb2) if isinstance(obb2, np.ndarray) else obb2
 
-    x1, y1 = obb1[..., :2].split(1, dim=-1)
-    x2, y2 = (x.squeeze(-1)[None] for x in obb2[..., :2].split(1, dim=-1))
-    a1, b1, c1 = _get_covariance_matrix(obb1)
-    a2, b2, c2 = (x.squeeze(-1)[None] for x in _get_covariance_matrix(obb2))
+    x1 = obb1[..., 0:1]
+    y1 = obb1[..., 1:2]
+    x2 = obb2[..., 0:1].T
+    y2 = obb2[..., 1:2].T
 
-    t1 = (
-        ((a1 + a2) * (y1 - y2).pow(2) + (b1 + b2) * (x1 - x2).pow(2)) / ((a1 + a2) * (b1 + b2) - (c1 + c2).pow(2) + eps)
-    ) * 0.25
-    t2 = (((c1 + c2) * (x2 - x1) * (y1 - y2)) / ((a1 + a2) * (b1 + b2) - (c1 + c2).pow(2) + eps)) * 0.5
-    t3 = (
-        ((a1 + a2) * (b1 + b2) - (c1 + c2).pow(2))
-        / (4 * ((a1 * b1 - c1.pow(2)).clamp_(0) * (a2 * b2 - c2.pow(2)).clamp_(0)).sqrt() + eps)
-        + eps
-    ).log() * 0.5
+    a1, b1, c1 = _get_covariance_matrix(obb1)
+    a2, b2, c2 = _get_covariance_matrix(obb2)
+    a2 = a2.T
+    b2 = b2.T
+    c2 = c2.T
+
+    d_x = x1 - x2  # (N, M)
+    d_y = y1 - y2  # (N, M)
+
+    A = a1 + a2
+    B = b1 + b2
+    C = c1 + c2
+
+    det_A = (a1 * b1 - c1.pow(2)).clamp_(0)
+    det_B = (a2 * b2 - c2.pow(2)).clamp_(0)
+
+    den = A * B - C.pow(2) + eps
+    t1 = (A * d_y.pow(2) + B * d_x.pow(2)) / den * 0.25
+    t2 = (C * (x2 - x1) * (y1 - y2)) / den * 0.5
+    t3 = ((A * B - C.pow(2)) / (4 * (det_A * det_B).sqrt() + eps) + eps).log() * 0.5
     bd = (t1 + t2 + t3).clamp(eps, 100.0)
     hd = (1.0 - (-bd).exp() + eps).sqrt()
     return 1 - hd
@@ -345,50 +370,67 @@ class ConfusionMatrix:
         """
         if gt_cls.shape[0] == 0:  # Check if labels is empty
             if detections is not None:
-                detections = detections[detections[:, 4] > self.conf]
-                detection_classes = detections[:, 5].int()
-                for dc in detection_classes:
-                    self.matrix[dc, self.nc] += 1  # false positives
+                mask = detections[:, 4] > self.conf
+                detection_classes = detections[mask][:, 5].int()
+                unique_dcs, counts = np.unique(detection_classes.cpu().numpy(), return_counts=True)
+                self.matrix[unique_dcs, self.nc] += counts
             return
         if detections is None:
             gt_classes = gt_cls.int()
-            for gc in gt_classes:
-                self.matrix[self.nc, gc] += 1  # background FN
+            unique_gcs, counts = np.unique(gt_classes.cpu().numpy(), return_counts=True)
+            self.matrix[self.nc, unique_gcs] += counts
             return
 
-        detections = detections[detections[:, 4] > self.conf]
+        mask = detections[:, 4] > self.conf
+        detections = detections[mask]
         gt_classes = gt_cls.int()
         detection_classes = detections[:, 5].int()
         is_obb = detections.shape[1] == 7 and gt_bboxes.shape[1] == 5  # with additional `angle` dimension
-        iou = (
-            batch_probiou(gt_bboxes, torch.cat([detections[:, :4], detections[:, -1:]], dim=-1))
-            if is_obb
-            else box_iou(gt_bboxes, detections[:, :4])
-        )
+
+        if is_obb:
+            det_boxes = torch.cat([detections[:, :4], detections[:, -1:]], dim=-1)
+            iou = batch_probiou(gt_bboxes, det_boxes)
+        else:
+            iou = box_iou(gt_bboxes, detections[:, :4])
 
         x = torch.where(iou > self.iou_thres)
-        if x[0].shape[0]:
+        if x[0].numel():
             matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()
-            if x[0].shape[0] > 1:
-                matches = matches[matches[:, 2].argsort()[::-1]]
-                matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
-                matches = matches[matches[:, 2].argsort()[::-1]]
-                matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
+            if x[0].numel() > 1:
+                # Sort matches by descending score, for unique greedy assignment (HARD)
+                sort_idxs = np.argsort(matches[:, 2])[::-1]
+                matches = matches[sort_idxs]
+                _, unique_det_idx = np.unique(matches[:, 1], return_index=True)
+                matches = matches[unique_det_idx]
+                sort_idxs = np.argsort(matches[:, 2])[::-1]
+                matches = matches[sort_idxs]
+                _, unique_gt_idx = np.unique(matches[:, 0], return_index=True)
+                matches = matches[unique_gt_idx]
         else:
             matches = np.zeros((0, 3))
 
         n = matches.shape[0] > 0
         m0, m1, _ = matches.transpose().astype(int)
-        for i, gc in enumerate(gt_classes):
-            j = m0 == i
-            if n and sum(j) == 1:
-                self.matrix[detection_classes[m1[j]], gc] += 1  # correct
-            else:
-                self.matrix[self.nc, gc] += 1  # true background
 
-        for i, dc in enumerate(detection_classes):
-            if not any(m1 == i):
-                self.matrix[dc, self.nc] += 1  # predicted background
+        # Accumulate true positives and false negatives (gt loop)
+        matched_gt = np.zeros(len(gt_classes), dtype=bool)
+        if n:
+            matched_gt[m0] = True
+            # All correct matches stored
+            self.matrix[detection_classes[m1], gt_classes[m0]] += 1
+        unmatched_gts = np.where(~matched_gt)[0]
+        if unmatched_gts.size:
+            unique_gts, counts = np.unique(gt_classes[unmatched_gts].cpu().numpy(), return_counts=True)
+            self.matrix[self.nc, unique_gts] += counts
+
+        # Accumulate false positives
+        matched_det = np.zeros(len(detection_classes), dtype=bool)
+        if n:
+            matched_det[m1] = True
+        unmatched_dets = np.where(~matched_det)[0]
+        if unmatched_dets.size:
+            unique_dcs, counts = np.unique(detection_classes[unmatched_dets].cpu().numpy(), return_counts=True)
+            self.matrix[unique_dcs, self.nc] += counts
 
     def matrix(self):
         """Return the confusion matrix."""
