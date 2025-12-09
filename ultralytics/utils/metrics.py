@@ -482,13 +482,16 @@ def plot_pr_curve(px, py, ap, save_dir=Path("pr_curve.png"), names={}, on_plot=N
     fig, ax = plt.subplots(1, 1, figsize=(9, 6), tight_layout=True)
     py = np.stack(py, axis=1)
 
-    if 0 < len(names) < 21:  # display per-class legend if < 21 classes
+    len_names = len(names)
+    if 0 < len_names < 21:  # display per-class legend if < 21 classes
         for i, y in enumerate(py.T):
             ax.plot(px, y, linewidth=1, label=f"{names[i]} {ap[i, 0]:.3f}")  # plot(recall, precision)
     else:
         ax.plot(px, py, linewidth=1, color="grey")  # plot(recall, precision)
 
-    ax.plot(px, py.mean(1), linewidth=3, color="blue", label=f"all classes {ap[:, 0].mean():.3f} mAP@0.5")
+    mean_py = py.mean(1)
+    mean_ap = ap[:, 0].mean()
+    ax.plot(px, mean_py, linewidth=3, color="blue", label=f"all classes {mean_ap:.3f} mAP@0.5")
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
     ax.set_xlim(0, 1)
@@ -517,14 +520,18 @@ def plot_mc_curve(px, py, save_dir=Path("mc_curve.png"), names={}, xlabel="Confi
     """
     fig, ax = plt.subplots(1, 1, figsize=(9, 6), tight_layout=True)
 
-    if 0 < len(names) < 21:  # display per-class legend if < 21 classes
+    len_names = len(names)
+    if 0 < len_names < 21:  # display per-class legend if < 21 classes
         for i, y in enumerate(py):
             ax.plot(px, y, linewidth=1, label=f"{names[i]}")  # plot(confidence, metric)
     else:
         ax.plot(px, py.T, linewidth=1, color="grey")  # plot(confidence, metric)
 
-    y = smooth(py.mean(0), 0.05)
-    ax.plot(px, y, linewidth=3, color="blue", label=f"all classes {y.max():.2f} at {px[y.argmax()]:.3f}")
+    mean_py = py.mean(0)
+    y = smooth(mean_py, 0.05)
+    ymax = y.max()
+    xmax = px[y.argmax()]
+    ax.plot(px, y, linewidth=3, color="blue", label=f"all classes {ymax:.2f} at {xmax:.3f}")
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_xlim(0, 1)
@@ -551,6 +558,9 @@ def compute_ap(recall, precision):
         (np.ndarray): Modified recall curve with sentinel values added at the beginning and end.
     """
     # Append sentinel values to beginning and end
+    # Append sentinel values to beginning and end
+    recall = np.asarray(recall)
+    precision = np.asarray(precision)
     mrec = np.concatenate(([0.0], recall, [1.0]))
     mpre = np.concatenate(([1.0], precision, [0.0]))
 
@@ -558,13 +568,9 @@ def compute_ap(recall, precision):
     mpre = np.flip(np.maximum.accumulate(np.flip(mpre)))
 
     # Integrate area under curve
-    method = "interp"  # methods: 'continuous', 'interp'
-    if method == "interp":
-        x = np.linspace(0, 1, 101)  # 101-point interp (COCO)
-        ap = np.trapz(np.interp(x, mrec, mpre), x)  # integrate
-    else:  # 'continuous'
-        i = np.where(mrec[1:] != mrec[:-1])[0]  # points where x-axis (recall) changes
-        ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])  # area under curve
+    # Only 'interp' branch is actually used, so avoid any check
+    x = np.linspace(0, 1, 101)  # 101-point interp (COCO)
+    ap = np.trapz(np.interp(x, mrec, mpre), x)  # integrate
 
     return ap, mpre, mrec
 
@@ -603,59 +609,86 @@ def ap_per_class(
     """
     # Sort by objectness
     i = np.argsort(-conf)
-    tp, conf, pred_cls = tp[i], conf[i], pred_cls[i]
+    tp = tp[i]
+    conf = conf[i]
+    pred_cls = pred_cls[i]
+
+    # Find unique classes
 
     # Find unique classes
     unique_classes, nt = np.unique(target_cls, return_counts=True)
     nc = unique_classes.shape[0]  # number of classes, number of detections
 
-    # Create Precision-Recall curve and compute AP for each class
-    x, prec_values = np.linspace(0, 1, 1000), []
+    # Prepare curve arrays once; avoid looping through expensive np.linspace each call
+    x = np.linspace(0, 1, 1000)
+    x_neg = -x
+    prec_values = []
 
-    # Average precision, precision and recall curves
-    ap, p_curve, r_curve = np.zeros((nc, tp.shape[1])), np.zeros((nc, 1000)), np.zeros((nc, 1000))
+    num_iou = tp.shape[1]
+    ap = np.zeros((nc, num_iou))
+    p_curve = np.zeros((nc, 1000))
+    r_curve = np.zeros((nc, 1000))
+
+    # Avoid repeated processing of names, minimize list/dict conversions
+    names_keys_set = set(names.keys())
+    unique_classes_list = unique_classes.tolist()
+    filtered_names = [names[k] for k in unique_classes_list if k in names_keys_set]
+    final_names = dict(enumerate(filtered_names))
+
     for ci, c in enumerate(unique_classes):
-        i = pred_cls == c
+        i_class = pred_cls == c
         n_l = nt[ci]  # number of labels
-        n_p = i.sum()  # number of predictions
+        n_p = np.count_nonzero(i_class)  # number of predictions
         if n_p == 0 or n_l == 0:
             continue
 
-        # Accumulate FPs and TPs
-        fpc = (1 - tp[i]).cumsum(0)
-        tpc = tp[i].cumsum(0)
+        tp_c = tp[i_class]
+        conf_c = conf[i_class]
+
+        # Compute cumulative sums with vectorized approach
+        fpc = (1 - tp_c).cumsum(0)
+        tpc = tp_c.cumsum(0)
 
         # Recall
         recall = tpc / (n_l + eps)  # recall curve
-        r_curve[ci] = np.interp(-x, -conf[i], recall[:, 0], left=0)  # negative x, xp because xp decreases
 
         # Precision
         precision = tpc / (tpc + fpc)  # precision curve
-        p_curve[ci] = np.interp(-x, -conf[i], precision[:, 0], left=1)  # p at pr_score
 
-        # AP from recall-precision curve
-        for j in range(tp.shape[1]):
+        # Recall curves
+        r_curve[ci] = np.interp(x_neg, -conf_c, recall[:, 0], left=0)
+
+        # Precision curves
+        p_curve[ci] = np.interp(x_neg, -conf_c, precision[:, 0], left=1)
+
+        for j in range(num_iou):
             ap[ci, j], mpre, mrec = compute_ap(recall[:, j], precision[:, j])
             if j == 0:
                 prec_values.append(np.interp(x, mrec, mpre))  # precision at mAP@0.5
 
-    prec_values = np.array(prec_values) if prec_values else np.zeros((1, 1000))  # (nc, 1000)
+    if prec_values:
+        prec_values = np.stack(prec_values, axis=0)
+    else:
+        prec_values = np.zeros((1, 1000))
+
+    # Compute F1 (harmonic mean of precision and recall)
 
     # Compute F1 (harmonic mean of precision and recall)
     f1_curve = 2 * p_curve * r_curve / (p_curve + r_curve + eps)
-    names = [v for k, v in names.items() if k in unique_classes]  # list: only classes that have data
-    names = dict(enumerate(names))  # to dict
     if plot:
-        plot_pr_curve(x, prec_values, ap, save_dir / f"{prefix}PR_curve.png", names, on_plot=on_plot)
-        plot_mc_curve(x, f1_curve, save_dir / f"{prefix}F1_curve.png", names, ylabel="F1", on_plot=on_plot)
-        plot_mc_curve(x, p_curve, save_dir / f"{prefix}P_curve.png", names, ylabel="Precision", on_plot=on_plot)
-        plot_mc_curve(x, r_curve, save_dir / f"{prefix}R_curve.png", names, ylabel="Recall", on_plot=on_plot)
+        plot_pr_curve(x, prec_values, ap, save_dir / f"{prefix}PR_curve.png", final_names, on_plot=on_plot)
+        plot_mc_curve(x, f1_curve, save_dir / f"{prefix}F1_curve.png", final_names, ylabel="F1", on_plot=on_plot)
+        plot_mc_curve(x, p_curve, save_dir / f"{prefix}P_curve.png", final_names, ylabel="Precision", on_plot=on_plot)
+        plot_mc_curve(x, r_curve, save_dir / f"{prefix}R_curve.png", final_names, ylabel="Recall", on_plot=on_plot)
 
-    i = smooth(f1_curve.mean(0), 0.1).argmax()  # max F1 index
-    p, r, f1 = p_curve[:, i], r_curve[:, i], f1_curve[:, i]  # max-F1 precision, recall, F1 values
-    tp = (r * nt).round()  # true positives
-    fp = (tp / (p + eps) - tp).round()  # false positives
-    return tp, fp, p, r, f1, ap, unique_classes.astype(int), p_curve, r_curve, f1_curve, x, prec_values
+    argmax_f1 = smooth(f1_curve.mean(0), 0.1).argmax()
+    p = p_curve[:, argmax_f1]
+    r = r_curve[:, argmax_f1]
+    f1 = f1_curve[:, argmax_f1]
+    tp_out = (r * nt).round()  # true positives
+    fp_out = (tp_out / (p + eps) - tp_out).round()  # false positives
+
+    return tp_out, fp_out, p, r, f1, ap, unique_classes.astype(int), p_curve, r_curve, f1_curve, x, prec_values
 
 
 class Metric(SimpleClass):
