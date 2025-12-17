@@ -121,9 +121,11 @@ class BOTrack(STrack):
         """Predict the mean and covariance for multiple object tracks using a shared Kalman filter."""
         if len(stracks) <= 0:
             return
-        multi_mean = np.asarray([st.mean.copy() for st in stracks])
-        multi_covariance = np.asarray([st.covariance for st in stracks])
+        multi_mean = np.empty((len(stracks), stracks[0].mean.shape[0]), dtype=stracks[0].mean.dtype)
+        multi_covariance = np.empty((len(stracks), *stracks[0].covariance.shape), dtype=stracks[0].covariance.dtype)
         for i, st in enumerate(stracks):
+            multi_mean[i, :] = st.mean
+            multi_covariance[i] = st.covariance
             if st.state != TrackState.Tracked:
                 multi_mean[i][6] = 0
                 multi_mean[i][7] = 0
