@@ -307,8 +307,12 @@ class Attention(nn.Module):
     def _separate_heads(x: Tensor, num_heads: int) -> Tensor:
         """Separate the input tensor into the specified number of attention heads."""
         b, n, c = x.shape
-        x = x.reshape(b, n, num_heads, c // num_heads)
-        return x.transpose(1, 2)  # B x N_heads x N_tokens x C_per_head
+        # Use .view instead of .reshape for potentially better memory/layout efficiency when possible.
+        out = x.view(b, n, num_heads, c // num_heads)
+        # Transpose is required for attention computation, but moveaxis can be faster for large Tensors
+        # Here transpose(1, 2) gives shape: B x num_heads x n x C_per_head
+        # As both .view and .reshape do NOT trigger a memory copy if compatible, we use .view for perf.
+        return out.transpose(1, 2)
 
     @staticmethod
     def _recombine_heads(x: Tensor) -> Tensor:
