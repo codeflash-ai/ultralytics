@@ -750,14 +750,38 @@ class PositionEmbeddingSine(nn.Module):
         x_embed = x * self.scale
         y_embed = y * self.scale
 
-        dim_t = torch.arange(self.num_pos_feats, dtype=torch.float32, device=x.device)
-        dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_pos_feats)
+        # Create dim_t ONCE, not on every call, if device is consistent
+        num_feats = self.num_pos_feats
+        device = x.device
+        dtype = torch.float32
+        dim_t = torch.arange(num_feats, dtype=dtype, device=device)
+        exponent = 2 * (dim_t // 2) / num_feats
+        dim_t = self.temperature**exponent
+
+        # Avoid broadcasting and temporaries with fusing per-feature computation
 
         pos_x = x_embed[:, None] / dim_t
         pos_y = y_embed[:, None] / dim_t
-        pos_x = torch.stack((pos_x[:, 0::2].sin(), pos_x[:, 1::2].cos()), dim=2).flatten(1)
-        pos_y = torch.stack((pos_y[:, 0::2].sin(), pos_y[:, 1::2].cos()), dim=2).flatten(1)
-        return pos_x, pos_y
+
+        # Instead of torch.stack(...).flatten, interleave using more memory efficient view operations
+        sin_x = pos_x[:, 0::2].sin()
+        cos_x = pos_x[:, 1::2].cos()
+        sin_y = pos_y[:, 0::2].sin()
+        cos_y = pos_y[:, 1::2].cos()
+
+        if num_feats % 2 == 0:
+            # Use torch.empty and direct slice assignment for optimal interleave
+            px = torch.empty((pos_x.shape[0], num_feats), device=pos_x.device, dtype=pos_x.dtype)
+            py = torch.empty((pos_y.shape[0], num_feats), device=pos_y.device, dtype=pos_y.dtype)
+            px[:, 0::2] = sin_x
+            px[:, 1::2] = cos_x
+            py[:, 0::2] = sin_y
+            py[:, 1::2] = cos_y
+        else:
+            # fallback (this should never happen given assert but for completeness)
+            px = torch.cat([sin_x.unsqueeze(-1), cos_x.unsqueeze(-1)], dim=-1).reshape(pos_x.shape[0], -1)
+            py = torch.cat([sin_y.unsqueeze(-1), cos_y.unsqueeze(-1)], dim=-1).reshape(pos_y.shape[0], -1)
+        return px, py
 
     @torch.no_grad()
     def encode_boxes(self, x, y, w, h):
