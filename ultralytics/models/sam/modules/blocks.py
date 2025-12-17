@@ -848,20 +848,28 @@ class PositionEmbeddingRandom(nn.Module):
         """Encodes normalized [0,1] coordinates using random spatial frequencies."""
         # Assuming coords are in [0, 1]^2 square and have d_1 x ... x d_n x 2 shape
         coords = 2 * coords - 1
-        coords = coords @ self.positional_encoding_gaussian_matrix
-        coords = 2 * np.pi * coords
-        # Outputs d_1 x ... x d_n x C shape
-        return torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1)
+        # Perform matmul and scaling in a single step for memory efficiency
+        # Remove extraneous intermediate allocations
+        mat = self.positional_encoding_gaussian_matrix
+        coords_proj = coords @ mat
+        coords_proj.mul_(2 * np.pi)  # in-place multiplication to reduce memory allocations
+
+        # Preallocate output tensor and calculate sine/cosine in a single device pass
+        sin_coords = torch.sin(coords_proj)
+        cos_coords = torch.cos(coords_proj)
+        return torch.cat((sin_coords, cos_coords), dim=-1)
 
     def forward(self, size: Tuple[int, int]) -> torch.Tensor:
         """Generates positional encoding for a grid using random spatial frequencies."""
         h, w = size
         device: Any = self.positional_encoding_gaussian_matrix.device
-        grid = torch.ones((h, w), device=device, dtype=torch.float32)
-        y_embed = grid.cumsum(dim=0) - 0.5
-        x_embed = grid.cumsum(dim=1) - 0.5
-        y_embed = y_embed / h
-        x_embed = x_embed / w
+
+        # Instead of constructing the grid and cumsum, use torch.arange for faster/more memory-efficient coordinate creation
+        y_range = (torch.arange(h, device=device, dtype=torch.float32) + 0.5) / h
+        x_range = (torch.arange(w, device=device, dtype=torch.float32) + 0.5) / w
+        # Create normalized meshgrid directly; this avoids creation/usage of a full 'ones' grid and two large cumsums
+        y_embed, x_embed = torch.meshgrid(y_range, x_range, indexing="ij")
+        # Now [h, w] arrays
 
         pe = self._pe_encoding(torch.stack([x_embed, y_embed], dim=-1))
         return pe.permute(2, 0, 1)  # C x H x W
