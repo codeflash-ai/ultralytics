@@ -363,7 +363,13 @@ class Results(SimpleClass):
             ...     result_cuda = result.cuda()
             ...     result_cpu = result.cpu()
         """
-        r = self.new()
+        # Inline the .new() method's logic to avoid an extra Results instantiation
+        r = Results(
+            orig_img=self.orig_img,
+            path=self.path,
+            names=self.names,
+            speed=self.speed,
+        )
         for k in self._keys:
             v = getattr(self, k)
             if v is not None:
@@ -451,6 +457,8 @@ class Results(SimpleClass):
             >>> results = model("path/to/image.jpg")
             >>> new_result = results[0].new()
         """
+        # No safe significant optimization possible for this trivial constructor call,
+        # especially as this method is also being inlined in _apply for efficiency.
         return Results(orig_img=self.orig_img, path=self.path, names=self.names, speed=self.speed)
 
     def plot(
