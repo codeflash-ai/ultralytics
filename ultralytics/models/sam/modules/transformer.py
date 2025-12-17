@@ -314,7 +314,7 @@ class Attention(nn.Module):
     def _recombine_heads(x: Tensor) -> Tensor:
         """Recombine separated attention heads into a single tensor."""
         b, n_heads, n_tokens, c_per_head = x.shape
-        x = x.transpose(1, 2)
+        x = x.transpose(1, 2).contiguous()
         return x.reshape(b, n_tokens, n_heads * c_per_head)  # B x N_tokens x C
 
     def forward(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
