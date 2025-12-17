@@ -446,22 +446,22 @@ class KalmanFilterXYWH(KalmanFilterXYAH):
             >>> kf = KalmanFilterXYWH()
             >>> predicted_mean, predicted_covariance = kf.multi_predict(mean, covariance)
         """
-        std_pos = [
-            self._std_weight_position * mean[:, 2],
-            self._std_weight_position * mean[:, 3],
-            self._std_weight_position * mean[:, 2],
-            self._std_weight_position * mean[:, 3],
-        ]
-        std_vel = [
-            self._std_weight_velocity * mean[:, 2],
-            self._std_weight_velocity * mean[:, 3],
-            self._std_weight_velocity * mean[:, 2],
-            self._std_weight_velocity * mean[:, 3],
-        ]
-        sqr = np.square(np.r_[std_pos, std_vel]).T
+        # Vectorize std calculation (N,)
+        std_weight_position, std_weight_velocity = self._std_weight_position, self._std_weight_velocity
+        std_pos_2 = std_weight_position * mean[:, 2]
+        std_pos_3 = std_weight_position * mean[:, 3]
+        std_vel_2 = std_weight_velocity * mean[:, 2]
+        std_vel_3 = std_weight_velocity * mean[:, 3]
 
-        motion_cov = [np.diag(sqr[i]) for i in range(len(mean))]
-        motion_cov = np.asarray(motion_cov)
+        # Shape (N, 8)
+        stds = np.stack(
+            [std_pos_2, std_pos_3, std_pos_2, std_pos_3, std_vel_2, std_vel_3, std_vel_2, std_vel_3], axis=1
+        )
+
+        sqr = stds**2  # (N,8)
+        N = sqr.shape[0]
+        # Create a broadcasted diagonal matrix for all motion covariances in one line, shape (N,8,8)
+        motion_cov = np.eye(8)[None, :, :] * sqr[:, :, None]
 
         mean = np.dot(mean, self._motion_mat.T)
         left = np.dot(self._motion_mat, covariance).transpose((1, 0, 2))
